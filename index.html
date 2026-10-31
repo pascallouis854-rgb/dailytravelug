@@ -1,0 +1,316 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Daily Travel - Client</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--primary:#0798E3;--yellow:#FFB703;--bg:#f6fbfd;--border:#e2f0f7;--shadow:0 8px 24px rgba(7,152,227,.10)}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui;background:var(--bg);color:#0f172a}
+.btn{border:0;border-radius:14px;padding:12px 18px;font-weight:700;cursor:pointer}.btn-primary{background:var(--primary);color:#fff}.btn-ghost{background:#fff;border:1px solid var(--border)}.card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow)}.input{width:100%;padding:13px 14px;border:1px solid var(--border);border-radius:12px;background:#fff}.small{font-size:12px;color:#64748b}
+.app{display:flex;min-height:100vh}.sidebar{width:280px;background:#fff;border-right:1px solid var(--border);padding:16px;position:sticky;top:0;height:100vh;overflow:auto}.main{flex:1;display:flex;flex-direction:column}.topbar{background:#fff;border-bottom:1px solid var(--border);padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+.brand{display:flex;gap:10px;align-items:center;font-weight:800}.logoImg{width:52px;height:52px;object-fit:contain;border-radius:12px;background:#fff;border:1px solid var(--border)}
+.nav{display:flex;flex-direction:column;gap:8px;margin-top:16px}.nav button{text-align:left;padding:12px 14px;border-radius:12px;border:1px solid transparent;background:transparent;cursor:pointer;font-weight:600}.nav button.active{background:var(--primary);color:#fff}
+.grid{display:grid;gap:12px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.seat{width:44px;height:44px;border-radius:12px;border:1px solid var(--border);display:grid;place-items:center;font-weight:700;cursor:pointer;background:#fff}.seat.taken{background:var(--primary);color:#fff;cursor:not-allowed}.seat.offline-blocked{background:#dc2626;color:#fff}.seat.selected{background:var(--yellow);color:#111}.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:12px 18px;border-radius:12px;z-index:9999}
+.hero{background:linear-gradient(135deg,#0798E3 0%, #62C9C5 100%);color:#fff;padding:18px;border-radius:20px;display:flex;gap:16px;align-items:center}
+.passWrap{display:flex}.passWrap .input{border-radius:12px 0 0 12px;flex:1}.passWrap .eyeBtn{border-radius:0 12px 12px 0;border:1px solid var(--border);border-left:0;background:#fff;padding:0 14px;cursor:pointer}
+@media(max-width:900px){.app{flex-direction:column}.sidebar{width:100%;height:auto;position:relative}.grid-2,.grid-3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const SUPABASE_URL = "https://qjffybockawpfpvanpzw.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZmZ5Ym9ja2F3cGZwdmFucHp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwMTA2OTcsImV4cCI6MjA3ODU4NzA5N30.GIOHGMbKaXcwTxiHkhAOir171Wja8bDUChONACqo328";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const LOGO = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Ccircle cx='40' cy='40' r='38' fill='%23fff' stroke='%23e2f0f7'/%3E%3Ctext x='40' y='46' text-anchor='middle' font-family='Inter' font-weight='800' font-size='12' fill='%230798E3'%3EDT%3C/text%3E%3C/svg%3E";
+let SESSION = JSON.parse(localStorage.getItem('dt_session_v3')||'null');
+let view = 'landing';
+let customerTab = 'search';
+let companyTab = 'overview';
+let searchQ = '';
+let selRoute = null, selSched = null, selSeat = null;
+let PLATFORM = {registration_fee:50000, commission_percent:5, admin_mtn_code:'', admin_airtel_code:'', mtn_fee_percent:1.5};
+
+function toast(m){const el=document.createElement('div'); el.className='toast'; el.textContent=m; document.body.appendChild(el); setTimeout(()=>el.remove(),4000)}
+function eye(id){const i=document.getElementById(id); if(i) i.type=i.type==='password'?'text':'password'}
+function money(n){return 'UGX '+Number(n||0).toLocaleString()}
+async function fetchPlatform(){try{const {data}=await supabaseClient.from('platform_settings').select('*').eq('id',1).maybeSingle(); if(data) PLATFORM=data;}catch(e){} return PLATFORM;}
+
+async function registerCustomer(){
+  const name=document.getElementById('rc_name').value.trim();
+  const email=document.getElementById('rc_email').value.trim().toLowerCase();
+  const phone=document.getElementById('rc_phone').value.trim();
+  const pass=document.getElementById('rc_pass').value;
+  if(!name||!email||!pass){toast('Fill all'); return;}
+  try{
+    const {data:exists} = await supabaseClient.from('users').select('id').eq('email',email).maybeSingle();
+    if(exists){toast('Email already registered - login'); view='login'; render(); return;}
+    const {data, error} = await supabaseClient.from('users').insert({role:'customer', name, email, phone, password:pass}).select().single();
+    if(error) throw error;
+    toast('Registered! Works on ANY device - computer or phone');
+    view='login'; render();
+  }catch(e){toast('Registration failed: '+e.message)}
+}
+
+async function registerCompany(){
+  const name=document.getElementById('rb_name').value.trim();
+  const branch=document.getElementById('rb_branch').value.trim()||'Main';
+  const loc=document.getElementById('rb_loc').value.trim();
+  const manager=document.getElementById('rb_manager').value.trim();
+  const email=document.getElementById('rb_email').value.trim().toLowerCase();
+  const phone=document.getElementById('rb_phone').value.trim();
+  const pass=document.getElementById('rb_pass').value;
+  const mtn=document.getElementById('rb_mtn').value.trim();
+  const airtel=document.getElementById('rb_airtel').value.trim();
+  if(!name||!email||!pass){toast('Fill company name, email, password'); return;}
+  try{
+    const {data:exists} = await supabaseClient.from('companies').select('id').eq('email',email).maybeSingle();
+    if(exists){toast('Company email exists'); return;}
+    const platform = await fetchPlatform();
+    const fee = platform.registration_fee || 50000;
+    if(fee>0){
+      toast('Processing registration fee '+money(fee)+' to Admin...');
+      try{await supabaseClient.from('transactions').insert({type:'registration_fee', amount_total:fee, amount_admin:fee, provider:'mtn', status:'completed', mtn_txn_id:'REG-'+Date.now()});}catch(e){}
+      await new Promise(r=>setTimeout(r,800));
+    }
+    const {data:comp, error} = await supabaseClient.from('companies').insert({name, email, phone, password:pass, mtn_code:mtn, airtel_code:airtel, status:'pending', registration_paid:true}).select().single();
+    if(error) throw error;
+    await supabaseClient.from('branches').insert({company_id:comp.id, location:loc||'Main', manager_contact:manager});
+    toast('Company registered! Fee paid to Admin. Awaiting approval. Login works on any device.');
+    view='login'; render();
+  }catch(e){toast('Company registration failed: '+e.message)}
+}
+
+async function doLogin(){
+  const email=document.getElementById('l_email').value.trim().toLowerCase();
+  const pass=document.getElementById('l_pass').value;
+  const role=document.getElementById('l_role').value;
+  if(!email||!pass){toast('Enter email & password'); return;}
+  try{
+    if(role==='customer'){
+      const {data} = await supabaseClient.from('users').select('*').eq('email',email).eq('password',pass).maybeSingle();
+      if(!data){toast('Invalid email or password - did you register as customer?'); return;}
+      SESSION={userId:data.id, role:data.role, email:data.email, name:data.name, phone:data.phone};
+      localStorage.setItem('dt_session_v3', JSON.stringify(SESSION));
+      view='customer'; customerTab='search'; toast('Logged in - welcome '+data.name+'! Same on phone & PC'); renderCustomer(); return;
+    }
+    if(role==='company'){
+      const {data} = await supabaseClient.from('companies').select('*').eq('email',email).eq('password',pass).maybeSingle();
+      if(!data){toast('Invalid company email or password'); return;}
+      SESSION={role:'company', companyId:data.id, email:data.email, name:data.name, status:data.status};
+      localStorage.setItem('dt_session_v3', JSON.stringify(SESSION));
+      view='company'; companyTab='overview'; toast('Logged in as '+data.name+' - status: '+data.status); renderCompany(); return;
+    }
+  }catch(e){toast('Login error: '+e.message)}
+}
+
+function doLogout(){localStorage.removeItem('dt_session_v3'); SESSION=null; view='landing'; render();}
+
+function render(){
+  const root=document.getElementById('root');
+  if(view==='landing') return renderLanding(root);
+  if(view==='login' || view==='register' || view==='register_customer' || view==='register_company') return renderLanding(root);
+  if(view==='customer') return renderCustomer();
+  if(view==='company') return renderCompany();
+}
+
+function renderLanding(root){
+  root.innerHTML=`<div style="min-height:100vh;padding:16px;background:linear-gradient(180deg,#f6fbfd,#fff)"><div style="max-width:1100px;margin:auto"><div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0"><div class="brand"><img src="${LOGO}" class="logoImg"/><div><div style="font-weight:800">Daily <span style="color:#FFB703">Travel</span> Client</div><div class="small">Bus Company & Customer - Online Synced - Same on Any Device</div></div></div><div style="display:flex;gap:8px"><button class="btn btn-ghost" onclick="view='login';render()">Login</button><button class="btn btn-primary" onclick="view='register';render()">Get Started</button></div></div><div class="hero" style="margin-top:12px"><img src="${LOGO}" style="width:100px;height:100px;border-radius:16px;background:#fff;padding:6px"/><div><h2 style="margin:0">BOOK • RIDE • EXPLORE</h2><div class="small" style="color:#e0f7ff;margin-top:4px">Login once, use on any device - computer or phone. All data synced online.</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" style="background:#FFB703;color:#111" onclick="view='register_company';render()">Register Company</button><button class="btn btn-ghost" style="background:#fff" onclick="view='login';render()">Login</button></div></div></div><div id="authBox" style="max-width:560px;margin:24px auto"></div></div></div>`;
+  setTimeout(renderAuthBox,0);
+}
+
+function renderAuthBox(){
+  const box=document.getElementById('authBox'); if(!box) return;
+  if(view==='login'){
+    box.innerHTML=`<div class="card" id="lc"><div style="text-align:center"><img src="${LOGO}" style="width:84px"/><h3>Login - Works on Any Device</h3><div class="small">Same email & password works on computer or phone</div></div><label>Role</label><select id="l_role" class="input"><option value="customer">Customer</option><option value="company">Bus Company</option></select><label>Email</label><input id="l_email" class="input" placeholder="same email you registered with"/><label>Password</label><div class="passWrap"><input id="l_pass" type="password" class="input"/><button type="button" class="eyeBtn" onclick="eye('l_pass')">👁</button></div><button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="doLogin()">Login - Same on Any Device</button><div class="small" style="text-align:center;margin-top:8px"><button class="btn btn-ghost" onclick="view='register';render()">No account? Register</button> <button class="btn btn-ghost" onclick="localStorage.clear(); toast('Cache cleared - try login again');">Clear Cache if login fails</button></div></div>`;
+  } else if(view==='register'){
+    box.innerHTML=`<div class="card"><h3>Create Account - Persists Across Devices</h3><div class="grid grid-2"><button class="btn btn-primary" onclick="view='register_customer';render()">I am Customer</button><button class="btn" style="background:#62C9C5;color:#fff" onclick="view='register_company';render()">I am Bus Company</button></div></div>`;
+  } else if(view==='register_customer'){
+    box.innerHTML=`<div class="card" id="rc"><h3>Customer Registration - Access on Any Device</h3><label>Name</label><input id="rc_name" class="input"/><label>Email (use same on all devices)</label><input id="rc_email" class="input"/><label>Phone</label><input id="rc_phone" class="input"/><label>Password (same on all devices)</label><div class="passWrap"><input id="rc_pass" type="password" class="input"/><button type="button" class="eyeBtn" onclick="eye('rc_pass')">👁</button></div><button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="registerCustomer()">Register - Cross-Device</button><button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="view='register';render()">Back</button></div>`;
+  } else if(view==='register_company'){
+    box.innerHTML=`<div class="card" id="rb"><h3>Bus Company Registration - Fee Goes to Admin</h3><div class="small">Registration fee UGX goes directly to Admin MTN/Airtel</div><label>Company Name</label><input id="rb_name" class="input"/><label>Branch Name</label><input id="rb_branch" class="input" value="Main"/><label>Branch Location</label><input id="rb_loc" class="input"/><label>Manager Contact</label><input id="rb_manager" class="input"/><label>Email (login on any device)</label><input id="rb_email" class="input"/><label>Phone</label><input id="rb_phone" class="input"/><label>Password</label><div class="passWrap"><input id="rb_pass" type="password" class="input"/><button type="button" class="eyeBtn" onclick="eye('rb_pass')">👁</button></div><label>Your MTN Merchant Code (where ticket money goes)</label><input id="rb_mtn" class="input" placeholder="25677..."/><label>Your Airtel Merchant Code</label><input id="rb_airtel" class="input"/><button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="registerCompany()">Submit - Pay Fee to Admin</button><button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="view='register';render()">Back</button></div>`;
+  }
+}
+
+async function renderCustomer(){
+  const root=document.getElementById('root');
+  const user=SESSION;
+  root.innerHTML=`<div class="app"><div class="sidebar"><div class="brand"><img src="${LOGO}" class="logoImg"/><div>Daily Travel<br/><span class="small">${user.name} - ${user.email}</span></div></div><div class="nav"><button class="${customerTab==='search'?'active':''}" onclick="customerTab='search';renderCustomer()">Search Trips</button><button class="${customerTab==='bookings'?'active':''}" onclick="customerTab='bookings';renderCustomer()">My Bookings</button><button onclick="doLogout()">Logout</button></div></div><div class="main"><div class="topbar"><b>Customer - Synced Online - Same on Phone & PC</b><span class="small">${user.email}</span></div><div style="padding:16px"><div id="custContent"></div></div></div></div>`;
+  const cont=document.getElementById('custContent');
+  if(customerTab==='search'){
+    cont.innerHTML=`<div style="display:flex;gap:8px;background:#fff;border:1px solid var(--border);padding:8px;border-radius:16px"><input id="sq" class="input" style="border:0" placeholder="Search origin, destination, company" value="${searchQ}" oninput="searchQ=this.value; renderCustomerSearch()"/><button class="btn btn-primary" onclick="renderCustomerSearch()">Search</button></div><div id="searchResults" style="margin-top:12px"></div>`;
+    renderCustomerSearch();
+  } else if(customerTab==='bookings'){
+    const {data:bookings} = await supabaseClient.from('bookings').select('*, schedules(*, routes(*, companies(*)))').eq('customer_id', user.userId).order('created_at',{ascending:false});
+    cont.innerHTML=`<div class="grid">${(bookings||[]).map(b=>`<div class="card"><b>${b.schedules?.routes?.origin} -> ${b.schedules?.routes?.destination} - Seat ${b.seat_number}</b><div class="small">Company ${b.schedules?.routes?.companies?.name} - ${money(b.final_price)} - ${new Date(b.created_at).toLocaleString()}</div></div>`).join('')||'No bookings yet - your bookings appear on any device because they are synced'}</div>`;
+  }
+}
+
+async function renderCustomerSearch(){
+  const cont=document.getElementById('searchResults'); if(!cont) return;
+  const {data:routes} = await supabaseClient.from('routes').select('*, companies(*), branches(*)').eq('companies.status','approved');
+  let filtered = routes||[];
+  if(searchQ){const q=searchQ.toLowerCase(); filtered=filtered.filter(r=> (r.origin+' '+r.destination+' '+(r.companies?.name||'')).toLowerCase().includes(q));}
+  const results = await Promise.all(filtered.map(async r=>{
+    const {data:scheds} = await supabaseClient.from('schedules').select('*, buses(*)').eq('route_id', r.id).gte('departure', Date.now()).order('departure');
+    return {route:r, schedules:scheds||[]};
+  }));
+  cont.innerHTML = results.map(item=>{
+    const r=item.route; if(item.schedules.length===0) return `<div class="card" style="opacity:.6"><b>${r.origin} -> ${r.destination}</b> - ${r.companies?.name} - No future trips</div>`;
+    return `<div class="card"><div style="display:flex;justify-content:space-between"><div><b>${r.origin} -> ${r.destination}</b> <span class="small">• ${r.companies?.name}</span><div class="small">Base ${money(r.base_price)} + commission</div></div><img src="${r.companies?.logo||LOGO}" style="width:40px;height:40px;border-radius:10px"/></div><div class="grid grid-3" style="margin-top:10px">${item.schedules.map(s=>`<div class="card" style="padding:10px"><div class="small">Dep ${new Date(s.departure).toLocaleString()} • ${s.buses?.name} • ${s.buses?.capacity} seats</div><button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="openBooking('${r.id}','${s.id}')">Select Seat</button></div>`).join('')}</div></div>`;
+  }).join('') || '<div class="card">No approved routes yet</div>';
+}
+
+async function openBooking(routeId, scheduleId){
+  selRoute=routeId; selSched=scheduleId;
+  const {data:route} = await supabaseClient.from('routes').select('*, companies(*)').eq('id', routeId).single();
+  const {data:sched} = await supabaseClient.from('schedules').select('*, buses(*)').eq('id', scheduleId).single();
+  const {data:bookings} = await supabaseClient.from('bookings').select('seat_number').eq('schedule_id', scheduleId);
+  const {data:blocks} = await supabaseClient.from('seat_blocks').select('seat_number').eq('schedule_id', scheduleId);
+  const taken = [...(bookings||[]).map(b=>b.seat_number), ...(blocks||[]).map(b=>b.seat_number)];
+  const cap = sched.buses?.capacity||30;
+  const platform = await fetchPlatform();
+  const finalPriceCalc = Math.round(route.base_price * (1 + (platform.commission_percent||5)/100 + (platform.mtn_fee_percent||1.5)/100));
+
+  const overlay=document.createElement('div'); overlay.id='bm'; overlay.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:50;display:grid;place-items:center;padding:12px';
+  overlay.innerHTML=`<div class="card" style="max-width:640px;width:100%;max-height:92vh;overflow:auto"><div style="display:flex;justify-content:space-between"><b>${route.origin}->${route.destination} • ${route.companies?.name}</b><button class="btn btn-ghost" onclick="document.getElementById('bm').remove()">X</button></div><div class="small">Final Price ${money(finalPriceCalc)} (only final shown)</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px">${Array.from({length:cap},(_,i)=>{const n=i+1; const isTaken=taken.includes(n); const isBlocked=(blocks||[]).some(b=>b.seat_number===n); return `<div class="seat ${isTaken?'taken':''} ${isBlocked?'offline-blocked':''} ${selSeat===n?'selected':''}" onclick="${isTaken?'':'selectSeat('+n+')'}">${n}${isBlocked?' X':''}</div>`}).join('')}</div><div class="small" style="margin-top:8px">Blue = taken online, Red X = blocked offline (sold at counter) - cannot be bought online on any device</div><div class="grid grid-2" style="margin-top:12px"><div><label>Payment</label><select id="payM" class="input"><option value="mtn">MTN MoMo</option><option value="airtel">Airtel</option></select></div><div><label>Phone</label><input id="payPhone" class="input" placeholder="25677..."/></div></div><button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="confirmBooking()">Pay ${money(finalPriceCalc)} & Book</button></div>`;
+  document.body.appendChild(overlay);
+  window.selectSeat=(n)=>{selSeat=n; document.querySelectorAll('.seat').forEach(el=>el.classList.remove('selected')); event.target.classList.add('selected');};
+}
+
+async function confirmBooking(){
+  if(!selSeat){toast('Select seat'); return;}
+  const phone=document.getElementById('payPhone')?.value.trim();
+  const method=document.getElementById('payM')?.value||'mtn';
+  const {data:route} = await supabaseClient.from('routes').select('*, companies(*)').eq('id', selRoute).single();
+  const platform=await fetchPlatform();
+  const base=route.base_price;
+  const adminComm=Math.round(base*(platform.commission_percent||5)/100);
+  const fee=Math.round(base*(platform.mtn_fee_percent||1.5)/100);
+  const finalPrice=base+adminComm+fee;
+  try{
+    const {data:existing} = await supabaseClient.from('bookings').select('id').eq('schedule_id', selSched).eq('seat_number', selSeat).maybeSingle();
+    if(existing){toast('Seat just taken! Pick another'); return;}
+    const {data:blockExists} = await supabaseClient.from('seat_blocks').select('id').eq('schedule_id', selSched).eq('seat_number', selSeat).maybeSingle();
+    if(blockExists){toast('Seat blocked offline - sold at counter'); return;}
+    const {data:booking, error} = await supabaseClient.from('bookings').insert({customer_id: SESSION.userId, schedule_id: selSched, seat_number: selSeat, customer_name: SESSION.name, customer_phone: phone||SESSION.phone, final_price: finalPrice, base_price: base, admin_commission: adminComm, provider_fee: fee, company_amount: base, status:'confirmed'}).select().single();
+    if(error) throw error;
+    try{await supabaseClient.from('transactions').insert({type:'ticket_sale', amount_total: finalPrice, amount_company: base, amount_admin: adminComm, amount_provider_fee: fee, to_company_id: route.company_id, booking_id: booking.id, provider: method, status:'completed', mtn_txn_id:'TKT-'+Date.now()});}catch(e){}
+    toast('Booked! Seat '+selSeat+' - '+money(finalPrice)+' - Visible on any device');
+    document.getElementById('bm')?.remove(); selSeat=null; customerTab='bookings'; renderCustomer();
+  }catch(e){toast('Booking failed: '+e.message)}
+}
+
+async function renderCompany(){
+  const root=document.getElementById('root');
+  const comp=SESSION;
+  root.innerHTML=`<div class="app"><div class="sidebar"><div class="brand"><img src="${LOGO}" class="logoImg"/><div>${comp.name}<br/><span class="small">${comp.email} - ${comp.status}</span></div></div><div class="nav"><button class="${companyTab==='overview'?'active':''}" onclick="companyTab='overview';renderCompany()">Overview</button><button class="${companyTab==='branches'?'active':''}" onclick="companyTab='branches';renderCompany()">Branches</button><button class="${companyTab==='buses'?'active':''}" onclick="companyTab='buses';renderCompany()">Buses</button><button class="${companyTab==='routes'?'active':''}" onclick="companyTab='routes';renderCompany()">Routes</button><button class="${companyTab==='schedules'?'active':''}" onclick="companyTab='schedules';renderCompany()">Schedules</button><button class="${companyTab==='seatmanager'?'active':''}" onclick="companyTab='seatmanager';renderCompany()">Seat Manager - Block Offline</button><button class="${companyTab==='bookings'?'active':''}" onclick="companyTab='bookings';renderCompany()">Bookings</button><button onclick="doLogout()">Logout</button></div></div><div class="main"><div class="topbar"><b>${comp.name} - Seat Manager - Online Synced</b><span class="small">${comp.email}</span></div><div style="padding:16px"><div id="compContent"></div></div></div></div>`;
+  const cont=document.getElementById('compContent');
+  if(companyTab==='overview'){
+    const {data:branches} = await supabaseClient.from('branches').select('*').eq('company_id', comp.companyId);
+    const {data:buses} = await supabaseClient.from('buses').select('*').eq('company_id', comp.companyId);
+    const {data:routes} = await supabaseClient.from('routes').select('*').eq('company_id', comp.companyId);
+    cont.innerHTML=`<div class="grid grid-3"><div class="card"><h3>${(branches||[]).length}</h3><p>Branches</p></div><div class="card"><h3>${(buses||[]).length}</h3><p>Buses</p></div><div class="card"><h3>${(routes||[]).length}</h3><p>Routes</p></div></div><div class="card" style="margin-top:12px"><b>Company Details - Visible on Any Device</b><div class="small">Name: ${comp.name}<br/>Email: ${comp.email}<br/>Status: ${comp.status}<br/>Ticket money goes to your MTN/Airtel code automatically</div></div>`;
+  } else if(companyTab==='branches'){
+    const {data:branches} = await supabaseClient.from('branches').select('*').eq('company_id', comp.companyId);
+    cont.innerHTML=`<div class="card"><h3>Branches</h3><div class="grid grid-2"><input id="br_name" class="input" placeholder="Branch name"/><input id="br_loc" class="input" placeholder="Location"/><input id="br_man" class="input" placeholder="Manager contact"/><button class="btn btn-primary" onclick="addBranch()">Add Branch</button></div><div style="margin-top:12px">${(branches||[]).map(b=>`<div class="card"><b>${b.location}</b> - ${b.manager_contact}</div>`).join('')||'No branches'}</div></div>`;
+  } else if(companyTab==='buses'){
+    const {data:branches} = await supabaseClient.from('branches').select('*').eq('company_id', comp.companyId);
+    const {data:buses} = await supabaseClient.from('buses').select('*, branches(*)').eq('company_id', comp.companyId);
+    cont.innerHTML=`<div class="card"><h3>Buses</h3><div class="grid grid-2"><select id="b_branch" class="input">${(branches||[]).map(b=>`<option value="${b.id}">${b.location}</option>`).join('')}</select><input id="b_name" class="input" placeholder="Bus name / plate"/><input id="b_cap" class="input" type="number" placeholder="Capacity e.g. 40"/><input id="b_staff" class="input" placeholder="Staff seats e.g. 1,2"/><button class="btn btn-primary" onclick="addBus()">Add Bus</button></div><div style="margin-top:12px">${(buses||[]).map(b=>`<div class="card"><b>${b.name}</b> - ${b.capacity} seats - ${b.branches?.location}</div>`).join('')||'No buses'}</div></div>`;
+  } else if(companyTab==='routes'){
+    const {data:branches} = await supabaseClient.from('branches').select('*').eq('company_id', comp.companyId);
+    const {data:routes} = await supabaseClient.from('routes').select('*, branches(*)').eq('company_id', comp.companyId);
+    cont.innerHTML=`<div class="card"><h3>Routes</h3><div class="grid grid-2"><select id="r_branch" class="input">${(branches||[]).map(b=>`<option value="${b.id}">${b.location}</option>`).join('')}</select><input id="r_origin" class="input" placeholder="Origin"/><input id="r_dest" class="input" placeholder="Destination"/><input id="r_price" class="input" type="number" placeholder="Base price"/><button class="btn btn-primary" onclick="addRoute()">Add Route</button></div><div style="margin-top:12px">${(routes||[]).map(r=>`<div class="card"><b>${r.origin} -> ${r.destination}</b> - Base ${money(r.base_price)}</div>`).join('')||'No routes'}</div></div>`;
+  } else if(companyTab==='schedules'){
+    const {data:routes} = await supabaseClient.from('routes').select('*').eq('company_id', comp.companyId);
+    const {data:buses} = await supabaseClient.from('buses').select('*').eq('company_id', comp.companyId);
+    const {data:schedules} = await supabaseClient.from('schedules').select('*, routes(*), buses(*)').in('route_id', (routes||[]).map(r=>r.id));
+    cont.innerHTML=`<div class="card"><h3>Schedules</h3><div class="grid grid-2"><select id="s_route" class="input">${(routes||[]).map(r=>`<option value="${r.id}">${r.origin}->${r.destination}</option>`).join('')}</select><select id="s_bus" class="input">${(buses||[]).map(b=>`<option value="${b.id}">${b.name} (${b.capacity} seats)</option>`).join('')}</select><input id="s_dep" class="input" type="datetime-local"/><button class="btn btn-primary" onclick="addSchedule()">Add Schedule</button></div><div style="margin-top:12px">${(schedules||[]).map(s=>`<div class="card"><b>${s.routes?.origin}->${s.routes?.destination}</b> - ${new Date(s.departure).toLocaleString()} - Bus ${s.buses?.name}</div>`).join('')||'No schedules'}</div></div>`;
+  } else if(companyTab==='seatmanager'){
+    const {data:routes} = await supabaseClient.from('routes').select('*').eq('company_id', comp.companyId);
+    const {data:schedules} = await supabaseClient.from('schedules').select('*, routes(*), buses(*)').in('route_id', (routes||[]).map(r=>r.id)).order('departure');
+    cont.innerHTML=`<div class="card"><h3>Seat Manager - Block Seats Sold Offline</h3><div class="small" style="margin-bottom:12px;background:#fff7e0;padding:10px;border-radius:12px"><b>How it works:</b><br/>1. Select a trip<br/>2. Click seats sold at counter/offline<br/>3. They turn RED - customers online CANNOT buy them on any device<br/>4. Click red again to unblock</div><div style="margin-bottom:12px"><label>Select Trip</label><select id="sm_schedule" class="input" onchange="loadSeatManager()"><option value="">-- Pick a trip --</option>${(schedules||[]).map(s=>`<option value="${s.id}">${s.routes?.origin}->${s.routes?.destination} - ${new Date(s.departure).toLocaleString()} - Bus ${s.buses?.name} (${s.buses?.capacity} seats)</option>`).join('')}</select></div><div id="seatManagerGrid"></div></div>`;
+  } else if(companyTab==='bookings'){
+    const {data:routes} = await supabaseClient.from('routes').select('id').eq('company_id', comp.companyId);
+    const routeIds = (routes||[]).map(r=>r.id);
+    let bookings=[];
+    if(routeIds.length>0){
+      const {data:scheds} = await supabaseClient.from('schedules').select('id').in('route_id', routeIds);
+      const schedIds = (scheds||[]).map(s=>s.id);
+      if(schedIds.length>0){
+        const {data:b} = await supabaseClient.from('bookings').select('*, schedules(*, routes(*))').in('schedule_id', schedIds).order('created_at',{ascending:false});
+        bookings=b||[];
+      }
+    }
+    cont.innerHTML=`<div class="grid">${bookings.map(b=>`<div class="card"><b>Seat ${b.seat_number} - ${b.schedules?.routes?.origin}->${b.schedules?.routes?.destination} - ${money(b.final_price)}</b><div class="small">Customer ${b.customer_name} - ${b.customer_phone} - ${new Date(b.created_at).toLocaleString()} - Your share ${money(b.company_amount)} goes to your MTN automatically</div></div>`).join('')||'No bookings yet'}</div>`;
+  }
+}
+
+async function loadSeatManager(){
+  const scheduleId=document.getElementById('sm_schedule')?.value; if(!scheduleId) return;
+  const grid=document.getElementById('seatManagerGrid'); grid.innerHTML='Loading...';
+  const {data:sched} = await supabaseClient.from('schedules').select('*, buses(*), routes(*)').eq('id', scheduleId).single();
+  const {data:bookings} = await supabaseClient.from('bookings').select('seat_number').eq('schedule_id', scheduleId);
+  const {data:blocks} = await supabaseClient.from('seat_blocks').select('*').eq('schedule_id', scheduleId);
+  const cap=sched.buses?.capacity||30;
+  const booked=(bookings||[]).map(b=>b.seat_number);
+  const blocked=(blocks||[]).map(b=>b.seat_number);
+  grid.innerHTML=`<div class="card"><b>${sched.routes?.origin}->${sched.routes?.destination} - ${new Date(sched.departure).toLocaleString()} - ${cap} seats</b><div class="small" style="margin:8px 0">Blue = booked online, Red = blocked offline (sold at counter), White = available. Click white to block offline, click red to unblock.</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px">${Array.from({length:cap},(_,i)=>{const n=i+1; const isBooked=booked.includes(n); const isBlocked=blocked.includes(n); return `<div class="seat ${isBooked?'taken':''} ${isBlocked?'offline-blocked':''}" onclick="${isBooked?'':'toggleBlock('+n+')'}" title="${isBooked?'Booked online - cannot block':isBlocked?'Blocked offline - click to unblock':'Available - click to block as offline sold'}">${n}${isBlocked?' X':''}</div>`}).join('')}</div><div style="margin-top:12px" class="small">Blocked offline: ${blocked.length} seats - these cannot be bought online on any device</div></div>`;
+}
+
+async function toggleBlock(seatNum){
+  const scheduleId=document.getElementById('sm_schedule')?.value; if(!scheduleId) return;
+  const {data:existing} = await supabaseClient.from('seat_blocks').select('id').eq('schedule_id', scheduleId).eq('seat_number', seatNum).maybeSingle();
+  if(existing){
+    await supabaseClient.from('seat_blocks').delete().eq('id', existing.id);
+    toast('Seat '+seatNum+' unblocked - now available online');
+  } else {
+    const {error} = await supabaseClient.from('seat_blocks').insert({schedule_id:scheduleId, seat_number:seatNum, blocked_by_company_id:SESSION.companyId, reason:'offline_sale'});
+    if(error){toast('Block failed: '+error.message); return;}
+    toast('Seat '+seatNum+' blocked as sold offline - customers cannot buy it online on any device');
+  }
+  loadSeatManager();
+}
+
+async function addBranch(){
+  const name=document.getElementById('br_name').value.trim(); const loc=document.getElementById('br_loc').value.trim(); const man=document.getElementById('br_man').value.trim();
+  if(!name){toast('Enter branch name'); return;}
+  await supabaseClient.from('branches').insert({company_id:SESSION.companyId, location:loc||name, manager_contact:man});
+  toast('Branch added - synced online'); renderCompany();
+}
+async function addBus(){
+  const branchId=document.getElementById('b_branch').value; const name=document.getElementById('b_name').value.trim(); const cap=parseInt(document.getElementById('b_cap').value); const staff=document.getElementById('b_staff').value.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n));
+  if(!name||!cap){toast('Fill name & capacity'); return;}
+  await supabaseClient.from('buses').insert({company_id:SESSION.companyId, branch_id:branchId, name, capacity:cap, staff_seats:staff});
+  toast('Bus added'); renderCompany();
+}
+async function addRoute(){
+  const branchId=document.getElementById('r_branch').value; const origin=document.getElementById('r_origin').value.trim(); const dest=document.getElementById('r_dest').value.trim(); const price=parseInt(document.getElementById('r_price').value);
+  if(!origin||!dest||!price){toast('Fill all'); return;}
+  await supabaseClient.from('routes').insert({company_id:SESSION.companyId, branch_id:branchId, origin, destination:dest, base_price:price});
+  toast('Route added'); renderCompany();
+}
+async function addSchedule(){
+  const routeId=document.getElementById('s_route').value; const busId=document.getElementById('s_bus').value; const dep=document.getElementById('s_dep').value;
+  if(!dep){toast('Pick date'); return;}
+  const t=new Date(dep).getTime(); if(t<Date.now()){toast('Must be future'); return;}
+  await supabaseClient.from('schedules').insert({route_id:routeId, bus_id:busId, departure:t});
+  toast('Schedule added'); renderCompany();
+}
+
+(async()=>{
+  await fetchPlatform();
+  if(SESSION){
+    if(SESSION.role==='customer'){view='customer'; renderCustomer();}
+    else if(SESSION.role==='company'){view='company'; renderCompany();}
+    else {view='landing'; render();}
+  } else {render();}
+})();
+</script>
+</body>
+</html>

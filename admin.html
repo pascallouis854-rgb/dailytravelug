@@ -1,0 +1,80 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Daily Travel - Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--primary:#0798E3;--bg:#f6fbfd;--card:#fff;--border:#e2f0f7;--shadow:0 8px 24px rgba(7,152,227,.10)}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui;background:var(--bg);color:#0f172a}
+.btn{border:0;border-radius:14px;padding:12px 18px;font-weight:700;cursor:pointer}.btn-primary{background:var(--primary);color:#fff}.btn-ghost{background:#fff;border:1px solid var(--border)}.card{background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow)}.input{width:100%;padding:13px 14px;border:1px solid var(--border);border-radius:12px;background:#fff}.badge{display:inline-flex;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700}.badge.pending{background:#fff7e0;color:#8a5a00}.badge.approved{background:#e6f7ff;color:#0798E3}.small{font-size:12px;color:#64748b}.app{display:flex;min-height:100vh}.sidebar{width:280px;background:#fff;border-right:1px solid var(--border);padding:16px;position:sticky;top:0;height:100vh;overflow:auto}.main{flex:1;display:flex;flex-direction:column}.topbar{background:#fff;border-bottom:1px solid var(--border);padding:14px 18px;display:flex;justify-content:space-between;align-items:center}.brand{display:flex;gap:10px;align-items:center;font-weight:800}.logoImg{width:52px;height:52px;object-fit:contain;border-radius:12px;background:#fff;border:1px solid var(--border)}.nav{display:flex;flex-direction:column;gap:8px;margin-top:16px}.nav button{text-align:left;padding:12px 14px;border-radius:12px;border:1px solid transparent;background:transparent;cursor:pointer;font-weight:600}.nav button.active{background:var(--primary);color:#fff}.grid{display:grid;gap:12px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:12px 18px;border-radius:12px;z-index:9999}
+@media(max-width:900px){.app{flex-direction:column}.sidebar{width:100%;height:auto;position:relative}.grid-2,.grid-3{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const SUPABASE_URL = "https://qjffybockawpfpvanpzw.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZmZ5Ym9ja2F3cGZwdmFucHp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwMTA2OTcsImV4cCI6MjA3ODU4NzA5N30.GIOHGMbKaXcwTxiHkhAOir171Wja8bDUChONACqo328";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const LOGO = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Ccircle cx='40' cy='40' r='38' fill='%23fff' stroke='%23e2f0f7'/%3E%3Ctext x='40' y='46' text-anchor='middle' font-family='Inter' font-weight='800' font-size='12' fill='%230798E3'%3EDT%3C/text%3E%3C/svg%3E";
+let SESSION = JSON.parse(localStorage.getItem('dt_admin_session')||'null');
+let view = 'landing';
+let adminTab = 'companies';
+function toast(m){const el=document.createElement('div'); el.className='toast'; el.textContent=m; document.body.appendChild(el); setTimeout(()=>el.remove(),3000)}
+function money(n){return 'UGX '+Number(n||0).toLocaleString()}
+async function doAdminLogin(){
+  const email=document.getElementById('a_email').value.trim().toLowerCase();
+  const pass=document.getElementById('a_pass').value;
+  if(email==='admin@dailytravel.ug' && pass==='admin123'){
+    SESSION={role:'admin', email}; localStorage.setItem('dt_admin_session', JSON.stringify(SESSION)); view='admin'; renderAdmin(); toast('Admin logged in'); return;
+  }
+  const {data} = await supabaseClient.from('users').select('*').eq('email',email).eq('password',pass).eq('role','admin').maybeSingle();
+  if(data){SESSION={role:'admin', email:data.email}; localStorage.setItem('dt_admin_session', JSON.stringify(SESSION)); view='admin'; renderAdmin(); toast('Admin logged in');}
+  else toast('Invalid admin credentials - use admin@dailytravel.ug / admin123');
+}
+function doLogout(){localStorage.removeItem('dt_admin_session'); SESSION=null; view='landing'; renderLanding();}
+function renderLanding(){
+  const root=document.getElementById('root');
+  root.innerHTML=`<div style="min-height:100vh;padding:16px;background:linear-gradient(180deg,#f6fbfd,#fff)"><div style="max-width:1100px;margin:auto"><div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0"><div class="brand"><img src="${LOGO}" class="logoImg"/><div><div style="font-weight:800">Daily <span style="color:#FFB703">Travel</span> Admin</div><div class="small">Monitoring & Approvals</div></div></div></div><div style="max-width:420px;margin:60px auto" class="card"><div style="text-align:center"><img src="${LOGO}" style="width:80px"/><h3>Admin Login</h3></div><label>Email</label><input id="a_email" class="input" value="admin@dailytravel.ug"/><label>Password</label><input id="a_pass" type="password" class="input" value="admin123"/><button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="doAdminLogin()">Login as Admin</button><div class="small" style="margin-top:8px">Default: admin@dailytravel.ug / admin123</div></div></div></div>`;
+}
+async function renderAdmin(){
+  const root=document.getElementById('root');
+  root.innerHTML=`<div class="app"><div class="sidebar"><div class="brand"><img src="${LOGO}" class="logoImg"/><div>Daily Travel<br/><span class="small">Admin - Monitoring</span></div></div><div class="nav"><button class="${adminTab==='companies'?'active':''}" onclick="adminTab='companies';renderAdmin()">Companies - Approve</button><button class="${adminTab==='bookings'?'active':''}" onclick="adminTab='bookings';renderAdmin()">All Bookings</button><button class="${adminTab==='transactions'?'active':''}" onclick="adminTab='transactions';renderAdmin()">Transactions</button><button class="${adminTab==='settings'?'active':''}" onclick="adminTab='settings';renderAdmin()">Settings - Fees & Accounts</button><button onclick="doLogout()">Logout</button></div></div><div class="main"><div class="topbar"><b>Admin - All data synced online</b><span class="small">admin@dailytravel.ug</span></div><div style="padding:16px"><div id="adminContent"></div></div></div></div>`;
+  const cont=document.getElementById('adminContent');
+  if(adminTab==='companies'){
+    const {data:companies} = await supabaseClient.from('companies').select('*').order('created_at',{ascending:false});
+    cont.innerHTML=`<div class="grid">${(companies||[]).map(c=>`<div class="card"><div style="display:flex;justify-content:space-between"><div><b>${c.name}</b> - ${c.email}<div class="small">Phone ${c.phone} - MTN ${c.mtn_code} Airtel ${c.airtel_code} - Status <span class="badge ${c.status}">${c.status}</span> - Paid: ${c.registration_paid?'Yes':'No'}</div><div class="small">Registered ${new Date(c.created_at).toLocaleString()}</div></div><div style="display:flex;gap:8px;flex-direction:column">${c.status==='pending'?`<button class="btn btn-primary" onclick="approveCompany('${c.id}')">Approve</button><button class="btn btn-ghost" onclick="rejectCompany('${c.id}')">Reject</button>`:''}<button class="btn btn-ghost" onclick="viewCompany('${c.id}')">View</button></div></div></div>`).join('')||'<div class="card">No companies yet - when bus company registers on client app, they appear here instantly</div>'}</div>`;
+  } else if(adminTab==='bookings'){
+    const {data:bookings} = await supabaseClient.from('bookings').select('*, schedules(*, routes(*, companies(*))), users(*)').order('created_at',{ascending:false}).limit(100);
+    cont.innerHTML=`<div class="grid">${(bookings||[]).map(b=>`<div class="card"><b>Seat ${b.seat_number} - ${b.schedules?.routes?.origin}->${b.schedules?.routes?.destination} - Company ${b.schedules?.routes?.companies?.name}</b><div class="small">Customer ${b.customer_name} (${b.users?.email}) - ${money(b.final_price)} = Base ${money(b.base_price)} + Commission ${money(b.admin_commission)} - Company gets ${money(b.company_amount)} to ${b.schedules?.routes?.companies?.mtn_code} - Admin gets ${money(b.admin_commission)} - ${new Date(b.created_at).toLocaleString()}</div></div>`).join('')||'No bookings'}</div>`;
+  } else if(adminTab==='transactions'){
+    const {data:tx} = await supabaseClient.from('transactions').select('*, companies:to_company_id(*)').order('created_at',{ascending:false}).limit(100);
+    const totalReg = (tx||[]).filter(t=>t.type==='registration_fee').reduce((s,t)=>s+(t.amount_total||0),0);
+    const totalComm = (tx||[]).filter(t=>t.type==='ticket_sale').reduce((s,t)=>s+(t.amount_admin||0),0);
+    cont.innerHTML=`<div class="grid grid-3"><div class="card"><h3>${money(totalReg)}</h3><p>Registration Fees - To your Admin MTN</p></div><div class="card"><h3>${money(totalComm)}</h3><p>Commissions from Tickets</p></div><div class="card"><h3>${money(totalReg+totalComm)}</h3><p>Total Earnings</p></div></div><div class="grid" style="margin-top:12px">${(tx||[]).map(t=>`<div class="card"><b>${t.type} - ${money(t.amount_total)} - ${t.provider}</b><div class="small">${t.type==='registration_fee'?'Company registration fee -> Your Admin account':`Ticket - Company ${t.companies?.name} gets ${money(t.amount_company)} -> ${t.companies?.mtn_code} - You get ${money(t.amount_admin)}` } - ${new Date(t.created_at).toLocaleString()}</div></div>`).join('')||'No transactions yet'}</div>`;
+  } else if(adminTab==='settings'){
+    const {data:platform} = await supabaseClient.from('platform_settings').select('*').eq('id',1).maybeSingle();
+    cont.innerHTML=`<div class="card"><h3>Adjustable Registration Fee & Commission</h3><div class="small" style="background:#fff7e0;padding:10px;border-radius:12px;margin-bottom:12px">Registration fee is what bus companies pay to register. Commission % is what you earn on each ticket. Both go directly to your MTN/Airtel codes below. Ticket money for bus companies goes directly to THEIR MTN codes they entered at registration.</div><label>Registration Fee (UGX) - Adjustable by Admin</label><input id="set_reg" class="input" type="number" value="${platform?.registration_fee||50000}"/><label>Commission Percent %</label><input id="set_comm" class="input" type="number" value="${platform?.commission_percent||5}"/><label>MTN Fee %</label><input id="set_mtn_fee" class="input" type="number" value="${platform?.mtn_fee_percent||1.5}"/><label>Admin MTN MoMo Code - Where registration fees & commissions go</label><input id="set_admin_mtn" class="input" value="${platform?.admin_mtn_code||''}" placeholder="25677..."/><label>Admin Airtel Code</label><input id="set_admin_airtel" class="input" value="${platform?.admin_airtel_code||''}"/><label>Support Phone</label><input id="set_sup_phone" class="input" value="${platform?.support_phone||''}"/><button class="btn btn-primary" style="margin-top:12px;width:100%" onclick="saveSettings()">Save - Affects All Devices Instantly</button></div>`;
+  }
+}
+async function approveCompany(id){await supabaseClient.from('companies').update({status:'approved', approved_at:new Date().toISOString()}).eq('id',id); toast('Company approved - now visible to customers on any device'); renderAdmin();}
+async function rejectCompany(id){await supabaseClient.from('companies').update({status:'rejected'}).eq('id',id); toast('Company rejected'); renderAdmin();}
+async function viewCompany(id){const {data:c} = await supabaseClient.from('companies').select('*').eq('id',id).single(); alert(`Company: ${c.name}\nEmail: ${c.email}\nPhone: ${c.phone}\nMTN: ${c.mtn_code} (ticket money goes here)\nAirtel: ${c.airtel_code}\nStatus: ${c.status}\nPaid: ${c.registration_paid}\nRegistered: ${c.created_at}`);}
+async function saveSettings(){
+  const reg=parseInt(document.getElementById('set_reg').value)||50000;
+  const comm=parseFloat(document.getElementById('set_comm').value)||5;
+  const mtnFee=parseFloat(document.getElementById('set_mtn_fee').value)||1.5;
+  const adminMtn=document.getElementById('set_admin_mtn').value.trim();
+  const adminAirtel=document.getElementById('set_admin_airtel').value.trim();
+  const supPhone=document.getElementById('set_sup_phone').value.trim();
+  await supabaseClient.from('platform_settings').update({registration_fee:reg, commission_percent:comm, mtn_fee_percent:mtnFee, admin_mtn_code:adminMtn, admin_airtel_code:adminAirtel, support_phone:supPhone}).eq('id',1);
+  toast('Settings saved - registration fee now '+money(reg)+' goes to your '+adminMtn+' - commission '+comm+'% on all tickets');
+  renderAdmin();
+}
+(function(){if(SESSION){view='admin'; renderAdmin();} else renderLanding();})();
+</script>
+</body>
+</html>
