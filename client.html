@@ -12073,7 +12073,7 @@ function co() {
     };
   }, []);
   M.useEffect(() => {
-    if (!r || !dailyTravelIsUuid(r.id)) return;
+    if (!r || r.company_name || !dailyTravelIsUuid(r.id)) return;
     let active = true;
     const loadCustomerRecords = async () => {
       const [{ data: bookings }, { data: payments }, { data: tickets }] =
@@ -12127,7 +12127,7 @@ function co() {
     };
   }, [r]);
   M.useEffect(() => {
-    if (!r || !dailyTravelIsUuid(r.id)) return undefined;
+    if (!r || r.company_name || !dailyTravelIsUuid(r.id)) return undefined;
     let active = true;
     const refreshCustomerRecords = async () => {
       const [{ data: bookings }, { data: payments }, { data: tickets }] =
@@ -12187,6 +12187,60 @@ function co() {
       active = false;
       dailyTravelSupabase.removeChannel(channel);
     };
+  }, [r]);
+  // Company dashboard: real bookings / payments / tickets for the APPROVED company.
+  // Mirrors the customer live loader, but filters by company_id (not customer_id).
+  // Runs only for a real Supabase company row (UUID id + company_name); demo
+  // companies (c1, c2, ...) keep their bundled demo data.
+  M.useEffect(() => {
+    if (!r || !r.company_name || !dailyTravelIsUuid(r.id)) return undefined;
+    let active = true;
+    const loadCompanyRecords = async () => {
+      try {
+        const [{ data: bookings }, { data: payments }, { data: tickets }] =
+          await Promise.all([
+            dailyTravelSupabase.from("bookings").select("*").eq("company_id", r.id).order("created_at", { ascending: false }),
+            dailyTravelSupabase.from("payments").select("*").eq("company_id", r.id).order("created_at", { ascending: false }),
+            dailyTravelSupabase.from("tickets").select("*").order("created_at", { ascending: false }),
+          ]);
+        if (!active) return;
+        if (bookings) {
+          const ticketMap = Object.fromEntries((tickets || []).map((ticket) => [ticket.booking_id, ticket]));
+          xc(bookings.map((booking) => ({
+            ...booking,
+            ticket_code: ticketMap[booking.id]?.ticket_code || booking.booking_reference || "",
+            seat_numbers: Array.isArray(booking.seat_numbers) ? booking.seat_numbers : [],
+            payment_method: booking.payment_method || "mtn_momo",
+            base_fare: Number(booking.base_fare) || 0,
+            admin_charge: Number(booking.admin_charge) || 0,
+            total_amount: Number(booking.total_amount) || 0,
+          })));
+        }
+        if (payments) {
+          wc(payments.map((payment) => ({
+            ...payment,
+            method: payment.payment_method || "mtn_momo",
+            status: payment.status || payment.provider_status || "pending",
+            amount: Number(payment.amount) || 0,
+            base_fare: Number(payment.base_amount) || 0,
+            admin_charge: Number(payment.admin_amount) || 0,
+            // Fields the Payments screen already renders:
+            company_code: r.mtn_momo_code || r.merchant_mtn_code || "",
+            admin_code: r.airtel_money_code || r.merchant_airtel_code || "",
+            booking_id: payment.booking_id || "",
+          })));
+        }
+      } catch (error) { console.warn("Company records load failed", error); }
+    };
+    loadCompanyRecords();
+    const channel = dailyTravelSupabase
+      .channel(`company-live-${r.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "bookings", filter: `company_id=eq.${r.id}` }, loadCompanyRecords)
+      .on("postgres_changes", { event: "*", schema: "public", table: "payments", filter: `company_id=eq.${r.id}` }, loadCompanyRecords)
+      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, loadCompanyRecords)
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedules", filter: `company_id=eq.${r.id}` }, () => { window.location.reload(); })
+      .subscribe();
+    return () => { active = false; dailyTravelSupabase.removeChannel(channel); };
   }, [r]);
   M.useEffect(() => {
     if (!k || !dailyTravelIsUuid(k.id)) return undefined;
@@ -14463,24 +14517,24 @@ function co() {
                                 label: "Total Bookings",
                                 value:
                                   RA.filter((o) => o.company_id === r.id)
-                                    .length || "24",
+                                    .length,
                                 sub: "+12% this week",
                               },
                               {
                                 label: "Revenue",
-                                value: `UGX ${(RA.reduce((o, h) => o + h.total_amount, 0) || 1250000).toLocaleString()}`,
+                                value: `UGX ${(RA.reduce((o, h) => o + h.total_amount, 0)).toLocaleString()}`,
                                 sub: "Base after 2% fee",
                               },
                               {
                                 label: "Active Schedules",
                                 value:
                                   dr.filter((o) => o.company_id === r.id)
-                                    .length || "8",
+                                    .length,
                                 sub: "Today",
                               },
                               {
                                 label: "Seats Occupancy",
-                                value: "78%",
+                                value: (() => { const sc = dr.filter((o) => o.company_id === r.id); const booked = sc.reduce((s, o) => s + (o.booked_seats?.length || 0), 0); const total = sc.reduce((s, o) => s + (o.seats_total || 0), 0); return total ? Math.round((booked / total) * 100) + "%" : "0%"; })(),
                                 sub: "Avg today",
                               },
                             ].map((o, h) =>
@@ -14564,8 +14618,7 @@ function co() {
                           f("div", {
                             className: "flex flex-col gap-4",
                             children: dr
-                              .filter((o) => o.company_id === r.id || !0)
-                              .slice(0, 3)
+                              .filter((o) => o.company_id === r.id)
                               .map((o) =>
                                 c(
                                   "div",
@@ -14628,6 +14681,7 @@ function co() {
                                                         : $,
                                                     ),
                                                   );
+                                                  (async () => { try { await dailyTravelSupabase.from("schedule_seats").upsert({ schedule_id: o.id, seat_number: Z, status: HA ? "available" : "blocked" }, { onConflict: "schedule_id,seat_number" }); } catch (err) { console.warn("Seat block save failed", err); } })();
                                                 },
                                                 className: `h-9 rounded-[8px] text-[11px] font-semibold border ${HA ? "bg-[#202124] text-white border-[#202124]" : "bg-white border-[#E0E0E0]"}`,
                                                 children: Z,
@@ -14641,7 +14695,7 @@ function co() {
                                         className:
                                           "text-[11px] text-[#888] mt-3",
                                         children:
-                                          "Tap to toggle offline block • Updates instantly via schedule_seats",
+                                          "Tap a seat to block / unblock it • Saved to Supabase (schedule_seats)",
                                       }),
                                     ],
                                   },
@@ -14714,7 +14768,7 @@ function co() {
                                                   RA.reduce(
                                                     (o, h) => o + h.base_fare,
                                                     0,
-                                                  ) || 980000
+                                                  )
                                                 ).toLocaleString(),
                                               ],
                                             }),
@@ -14738,7 +14792,7 @@ function co() {
                                                     (o, h) =>
                                                       o + h.admin_charge,
                                                     0,
-                                                  ) || 20000
+                                                  )
                                                 ).toLocaleString(),
                                               ],
                                             }),
@@ -14825,6 +14879,48 @@ function co() {
                                       o.id,
                                     ),
                                   ),
+                                }),
+
+                              a === "profile" &&
+                                f("div", {
+                                  className: "text-left mt-6",
+                                  children: [
+                                    ["Company", r.company_name || ""],["Trading name", r.trading_name || ""],["Email", r.email || ""],["Phone", r.phone || ""],["Location", r.operating_location || r.location || ""],["Address", r.address || ""],["Representative", r.rep_name || ""],["Rep phone", r.rep_phone || ""],["MTN MoMo code", r.mtn_momo_code || r.merchant_mtn_code || ""],["Airtel Money code", r.airtel_money_code || r.merchant_airtel_code || ""],["Approval status", r.approval_status || "approved"],["Company ID", r.id || ""],
+                                  ].map((row) =>
+                                    c("div", { className: "flex justify-between py-2 border-b border-[#F0F0F0] text-[12px]", children: [c("span", { className: "text-[#888]", children: row[0] }), c("span", { className: "font-semibold text-right", children: String(row[1]) })] }, row[0]),
+                                  ),
+                                }),
+                              a === "buses" &&
+                                f("div", {
+                                  className: "text-left mt-4",
+                                  children: (() => { const seen = {}; dr.filter((o) => o.company_id === r.id).forEach((o) => { seen[o.bus_reg || "—"] = seen[o.bus_reg || "—"] || { reg: o.bus_reg || "—", layout: o.layout || "", total: o.seats_total || 0, trips: 0 }; seen[o.bus_reg || "—"].trips += 1; }); const buses = Object.values(seen); return buses.length ? buses.map((o) => c("div", { className: "flex justify-between py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("span", { children: [o.reg, " • ", o.layout] }), c("span", { children: [o.total, " seats • ", o.trips, " schedule(s)"] })] }, o.reg)) : [f("p", { className: "text-[13px] text-[#888]", children: "No buses yet — buses appear here once you have schedules in Supabase." })]; })(),
+                                }),
+                              a === "routes" &&
+                                f("div", {
+                                  className: "text-left mt-4",
+                                  children: (() => { const seen = {}; dr.filter((o) => o.company_id === r.id).forEach((o) => { const key = (o.origin || "") + " → " + (o.destination || ""); seen[key] = seen[key] || { route: key, trips: 0, fare: o.fare || 0 }; seen[key].trips += 1; if (o.fare) seen[key].fare = Math.min(seen[key].fare || o.fare, o.fare); }); const routes = Object.values(seen); return routes.length ? routes.map((o) => c("div", { className: "flex justify-between py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("span", { children: o.route }), c("span", { children: ["UGX ", Number(o.fare || 0).toLocaleString(), " • ", o.trips, " schedule(s)"] })] }, o.route)) : [f("p", { className: "text-[13px] text-[#888]", children: "No routes yet — routes appear here once you have schedules in Supabase." })]; })(),
+                                }),
+                              a === "schedules" &&
+                                f("div", {
+                                  className: "text-left mt-4",
+                                  children: (() => { const list = dr.filter((o) => o.company_id === r.id); return list.length ? list.map((o) => c("div", { className: "flex justify-between py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("span", { children: [o.origin, " → ", o.destination, " • ", o.date, " ", o.departure_time, " • ", o.bus_reg] }), c("span", { children: ["UGX ", Number(o.fare || 0).toLocaleString(), " • ", (o.seats_total || 0) - (o.booked_seats?.length || 0), "/", (o.seats_total || 0), " seats left"] })] }, o.id)) : [f("p", { className: "text-[13px] text-[#888]", children: "No schedules yet." })]; })(),
+                                }),
+                              a === "earnings" &&
+                                f("div", {
+                                  className: "text-left mt-6",
+                                  children: [
+                                    c("div", { className: "grid grid-cols-3 gap-3 mb-4", children: [
+                                      c("div", { className: "bg-[#F5F7F8] rounded-[12px] p-4", children: [f("p", { className: "text-[11px] text-[#888]", children: "Total collected" }), c("p", { className: "font-bold", children: ["UGX ", fr.reduce((s, o) => s + (Number(o.amount) || 0), 0).toLocaleString()] })] }),
+                                      c("div", { className: "bg-[#FFF3E0] rounded-[12px] p-4", children: [f("p", { className: "text-[11px] text-[#888]", children: "Platform 2%" }), c("p", { className: "font-bold", children: ["UGX ", fr.reduce((s, o) => s + (Number(o.admin_amount ?? o.admin_charge) || 0), 0).toLocaleString()] })] }),
+                                      c("div", { className: "bg-[#E8F5E9] rounded-[12px] p-4", children: [f("p", { className: "text-[11px] text-[#888]", children: "Net to company" }), c("p", { className: "font-bold", children: ["UGX ", (fr.reduce((s, o) => s + (Number(o.amount) || 0), 0) - fr.reduce((s, o) => s + (Number(o.admin_amount ?? o.admin_charge) || 0), 0)).toLocaleString()] })] }),
+                                    ] }),
+                                    fr.length ? fr.map((o) => c("div", { className: "flex justify-between py-2 border-b border-[#F0F0F0] text-[12px]", children: [c("span", { children: [o.booking_id, " • ", o.method, " • ", o.status] }), c("span", { children: ["UGX ", Number(o.amount || 0).toLocaleString()] })] }, o.id)) : f("p", { className: "text-[13px] text-[#888]", children: "No earnings yet — earnings appear here as customers pay." }),
+                                  ],
+                                }),
+                              a === "notifications" &&
+                                f("div", {
+                                  className: "text-left mt-4",
+                                  children: (() => { const items = [...RA.map((o) => ({ id: "b-" + o.id, when: o.created_at || "", text: "New booking " + (o.ticket_code || o.booking_reference || "") + " • Seats " + (o.seat_numbers || []).join(",") + " • UGX " + Number(o.total_amount || 0).toLocaleString() })), ...fr.map((o) => ({ id: "p-" + o.id, when: o.created_at || "", text: "Payment " + (o.status || "") + " • UGX " + Number(o.amount || 0).toLocaleString() + " • " + (o.method || "") }))].sort((x, y) => String(y.when).localeCompare(String(x.when))).slice(0, 10); return items.length ? items.map((o) => c("div", { className: "py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("p", { children: o.text }), f("p", { className: "text-[11px] text-[#888]", children: o.when ? new Date(o.when).toLocaleString() : "" })] }, o.id)) : [f("p", { className: "text-[13px] text-[#888]", children: "No notifications yet." })]; })(),
                                 }),
                             ],
                           }),
