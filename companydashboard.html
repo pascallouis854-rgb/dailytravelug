@@ -1,2 +1,182 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Daily Travel - FULL</title><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><style>*{margin:0;padding:0;box-sizing:border-box;font-family:sans-serif}body{background:#f5f7fb;display:flex}#sidebar{width:260px;background:white;border-right:1px solid #e5e7eb;padding:20px 12px;position:fixed;height:100vh}#main{margin-left:260px;flex:1;padding:24px}.logo{font-weight:800;font-size:22px;margin-bottom:30px}.menu-item{padding:12px 14px;border-radius:10px;cursor:pointer;color:#374151;margin-bottom:4px}.menu-item.active{background:#dbeafe;color:#2563eb;font-weight:600}.card{background:white;border-radius:16px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);margin-bottom:20px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}input,select{padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;width:100%;margin:4px 0}button{background:#2563eb;color:white;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:600}table{width:100%;border-collapse:collapse}th,td{padding:10px;text-align:left;border-bottom:1px solid #eee}th{background:#f9fafb}</style></head><body><div id="sidebar"><div class="logo">🚌 Daily Travel</div><div class="menu-item active" onclick="showModule('overview')">🏠 Overview</div><div class="menu-item" onclick="showModule('buses')">🚌 Buses</div><div class="menu-item" onclick="showModule('routes')">📍 Routes</div><div class="menu-item" onclick="showModule('schedules')">📅 Schedules</div><div class="menu-item" onclick="showModule('bookings')">🎫 Bookings</div><div class="menu-item" onclick="showModule('payments')">💳 Payments</div><div class="menu-item" onclick="showModule('earnings')">📊 Earnings</div><div style="margin-top:30px;font-size:12px;color:#6b7280" id="companyInfo">Loading...</div></div><div id="main"><div id="content">Loading...</div></div><script>
-const SUPABASE_URL='https://skttacgyeghuzaplpeop.supabase.co';const SUPABASE_KEY='sb_publishable_v5etAOTCAkpY25gdvEaAwg_7p0wztgF';const supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);let currentCompany=null;async function init(){const{data:{user}}=await supabase.auth.getUser();if(!user){document.getElementById('content').innerHTML='<div class="card"><h2>Login Required</h2><input id="email" placeholder="Company email"><input id="pass" type="password" placeholder="Password"><button onclick="doLogin()">Login</button><p id="loginMsg"></p></div>';return;}const{data:company}=await supabase.from('bus_companies').select('*').eq('id',user.id).single();if(!company){const{data:byEmail}=await supabase.from('bus_companies').select('*').eq('email',user.email).single();currentCompany=byEmail;}else currentCompany=company;if(currentCompany){document.getElementById('companyInfo').innerHTML=`<b>${currentCompany.company_name||currentCompany.email}</b><br>MTN • Airtel Connected`}showModule('overview');}async function doLogin(){const e=document.getElementById('email').value,p=document.getElementById('pass').value;document.getElementById('loginMsg').innerText='Logging in...';const{data,error}=await supabase.auth.signInWithPassword({email:e,password:p});if(error){document.getElementById('loginMsg').innerText=error.message;return;}init();}function setActive(el){document.querySelectorAll('.menu-item').forEach(m=>m.classList.remove('active'));if(el)el.classList.add('active');}async function showModule(name){const items=document.querySelectorAll('.menu-item');items.forEach(e=>{if(e.textContent.toLowerCase().includes(name))setActive(e)});const c=document.getElementById('content');if(name==='overview')c.innerHTML=await overviewHTML();if(name==='buses'){c.innerHTML=busesHTML();loadBuses();}if(name==='routes'){c.innerHTML=routesHTML();loadRoutes();}if(name==='schedules'){c.innerHTML=schedulesHTML();loadSchedules();setTimeout(()=>{loadRoutesOptions();loadBusesOptions();},500);}if(name==='bookings'){c.innerHTML=await bookingsHTML();}if(name==='payments'){c.innerHTML=await paymentsHTML();}if(name==='earnings'){c.innerHTML=await earningsHTML();}}async function overviewHTML(){const{data:buses}=await supabase.from('buses').select('*');const{data:bookings}=await supabase.from('bookings').select('*');const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;return `<h1>Overview</h1><p>Welcome ${currentCompany?.company_name||''}</p><div class="grid3"><div class="card"><div>Gross Base</div><div style="font-size:28px;font-weight:800">UGX ${(total||980000).toLocaleString()}</div></div><div class="card"><div>Active Buses</div><div style="font-size:28px;font-weight:800">${buses?.length||0}</div></div><div class="card"><div>Bookings</div><div style="font-size:28px;font-weight:800">${bookings?.length||0}</div></div></div><div class="card"><h3>System Status</h3><p>✅ Linked online via Supabase • MTN • Airtel Money • Live</p></div>`;}function busesHTML(){return `<div class="card"><h2>Buses</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><input id="plate" placeholder="Plate UAA 123"><input id="busName" placeholder="Bus Name"><input id="seats" type="number" placeholder="Seats 45"><button onclick="addBus()">Add Bus</button></div></div><div class="card"><table><tr><th>Plate</th><th>Name</th><th>Seats</th><th>Action</th></tr><tbody id="busesList"></tbody></table></div>`}async function loadBuses(){const{data}=await supabase.from('buses').select('*').order('created_at',{ascending:false});document.getElementById('busesList').innerHTML=(data||[]).map(b=>`<tr><td>${b.plate_number||''}</td><td>${b.bus_name||''}</td><td>${b.total_seats||''}</td><td><button onclick="deleteBus('${b.id}')">Delete</button></td></tr>`).join('')||'<tr><td colspan=4>No buses - add one above</td></tr>'}async function addBus(){const p=document.getElementById('plate').value,n=document.getElementById('busName').value,s=document.getElementById('seats').value;if(!p)return alert('Plate required');await supabase.from('buses').insert([{plate_number:p,bus_name:n,total_seats:parseInt(s)||45,company_id:currentCompany.id}]);loadBuses();}async function deleteBus(id){await supabase.from('buses').delete().eq('id',id);loadBuses();}function routesHTML(){return `<div class="card"><h2>Routes</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><input id="fromC" placeholder="From Kampala"><input id="toC" placeholder="To Gulu"><input id="price" type="number" placeholder="35000"><button onclick="addRoute()">Add Route</button></div></div><div class="card"><div id="routesList"></div></div>`}async function loadRoutes(){const{data}=await supabase.from('routes').select('*').order('created_at',{ascending:false});document.getElementById('routesList').innerHTML=(data||[]).map(r=>`<div style="padding:10px;border-bottom:1px solid #eee;display:flex;justify-content:space-between"><span>${r.from_city} → ${r.to_city} - UGX ${r.price}</span><button onclick="deleteRoute('${r.id}')">Delete</button></div>`).join('')||'No routes - add Kampala to Gulu'}async function addRoute(){const f=document.getElementById('fromC').value,t=document.getElementById('toC').value,p=document.getElementById('price').value;if(!f||!t)return alert('Required');await supabase.from('routes').insert([{from_city:f,to_city:t,price:parseInt(p)||0,company_id:currentCompany.id}]);loadRoutes();}async function deleteRoute(id){await supabase.from('routes').delete().eq('id',id);loadRoutes();}function schedulesHTML(){return `<div class="card"><h2>Schedules</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><select id="schedRoute"></select><select id="schedBus"></select><input id="dep" type="datetime-local"><button onclick="addSchedule()">Add Schedule</button></div></div><div class="card"><div id="schedList"></div></div>`}async function loadRoutesOptions(){const{data}=await supabase.from('routes').select('*');const sel=document.getElementById('schedRoute');if(sel)sel.innerHTML=(data||[]).map(r=>`<option value="${r.id}">${r.from_city}→${r.to_city}</option>`).join('');}async function loadBusesOptions(){const{data}=await supabase.from('buses').select('*');const sel=document.getElementById('schedBus');if(sel)sel.innerHTML=(data||[]).map(b=>`<option value="${b.id}">${b.plate_number}</option>`).join('');}async function loadSchedules(){const{data}=await supabase.from('schedules').select('*,routes(from_city,to_city),buses(plate_number)').order('departure_time',{ascending:true});document.getElementById('schedList').innerHTML=(data||[]).map(s=>`<div style="padding:10px;border-bottom:1px solid #eee">${s.routes?.from_city||''}→${s.routes?.to_city||''} | ${s.buses?.plate_number||''} | ${new Date(s.departure_time).toLocaleString()} <button onclick="deleteSched('${s.id}')">Delete</button></div>`).join('')||'No schedules'}async function addSchedule(){const r=document.getElementById('schedRoute').value,b=document.getElementById('schedBus').value,d=document.getElementById('dep').value;await supabase.from('schedules').insert([{route_id:r,bus_id:b,departure_time:d,company_id:currentCompany.id}]);loadSchedules();}async function deleteSched(id){await supabase.from('schedules').delete().eq('id',id);loadSchedules();}async function bookingsHTML(){const{data}=await supabase.from('bookings').select('*').order('created_at',{ascending:false});return `<div class="card"><h2>Bookings</h2><table><tr><th>Passenger</th><th>Seat</th><th>Amount</th><th>Status</th></tr>${(data||[]).map(b=>`<tr><td>${b.passenger_name||''}</td><td>${b.seat_number||''}</td><td>UGX ${b.amount||0}</td><td>${b.status}</td></tr>`).join('')||'<tr><td colspan=4>No bookings yet</td></tr>'}</table></div>`;}async function paymentsHTML(){const{data:bookings}=await supabase.from('bookings').select('*');const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;return `<div class="card"><h2>Payments - MTN MoMo & Airtel Money</h2><div style="background:#f0fdf4;padding:16px;border-radius:12px;margin:12px 0">Gross Base: <b>UGX ${total.toLocaleString()}</b> • All payments via Supabase online</div></div>`;}async function earningsHTML(){const{data:bookings}=await supabase.from('bookings').select('*');const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;return `<div class="card"><h2>Earnings</h2><div class="grid3"><div style="background:#eff6ff;padding:20px;border-radius:12px"><div>Total Revenue</div><b style="font-size:24px">UGX ${total.toLocaleString()}</b></div><div style="background:#f0fdf4;padding:20px;border-radius:12px"><div>Net After 10% Fee</div><b style="font-size:24px">UGX ${Math.round(total*0.9).toLocaleString()}</b></div><div style="background:#fefce8;padding:20px;border-radius:12px"><div>Platform Fee</div><b style="font-size:24px">UGX ${Math.round(total*0.1).toLocaleString()}</b></div></div></div>`;}init();</script></body></html>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Travel - Company</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:sans-serif}
+body{background:#f5f7fb;display:flex}
+#sidebar{width:260px;background:white;border-right:1px solid #e5e7eb;padding:20px 12px;position:fixed;height:100vh}
+#main{margin-left:260px;flex:1;padding:24px}
+.logo{font-weight:800;font-size:22px;margin-bottom:30px}
+.menu-item{padding:12px 14px;border-radius:10px;cursor:pointer;color:#374151;margin-bottom:4px}
+.menu-item.active{background:#dbeafe;color:#2563eb;font-weight:600}
+.card{background:white;border-radius:16px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);margin-bottom:20px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+input,select{padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;width:100%;margin:4px 0}
+button{background:#2563eb;color:white;border:none;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:600}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px;text-align:left;border-bottom:1px solid #eee}
+th{background:#f9fafb}
+</style>
+</head>
+<body>
+<div id="sidebar">
+<div class="logo">Daily Travel</div>
+<div class="menu-item active" onclick="showModule('overview')">Overview</div>
+<div class="menu-item" onclick="showModule('buses')">Buses</div>
+<div class="menu-item" onclick="showModule('routes')">Routes</div>
+<div class="menu-item" onclick="showModule('schedules')">Schedules</div>
+<div class="menu-item" onclick="showModule('bookings')">Bookings</div>
+<div class="menu-item" onclick="showModule('payments')">Payments</div>
+<div class="menu-item" onclick="showModule('earnings')">Earnings</div>
+<div style="margin-top:30px;font-size:12px;color:#6b7280" id="companyInfo">Loading...</div>
+</div>
+<div id="main"><div id="content">Loading...</div></div>
+<script>
+const URL='https://skttacgyeghuzaplpeop.supabase.co';
+const KEY='sb_publishable_v5etAOTCAkpY25gdvEaAwg_7p0wztgF';
+const supabase=window.supabase.createClient(URL,KEY);
+let currentCompany=null;
+async function init(){
+const{data:{user}}=await supabase.auth.getUser();
+if(!user){
+document.getElementById('content').innerHTML='<div class="card"><h2>Login</h2><input id="email" placeholder="Email"><input id="pass" type="password" placeholder="Pass"><button onclick="doLogin()">Login</button><p id="msg"></p></div>';
+return;}
+const{data:c}=await supabase.from('bus_companies').select('*').eq('id',user.id).single();
+currentCompany=c;
+if(currentCompany)document.getElementById('companyInfo').innerHTML='<b>'+currentCompany.company_name+'</b><br>MTN Airtel';
+showModule('overview');
+}
+async function doLogin(){
+const e=document.getElementById('email').value;
+const p=document.getElementById('pass').value;
+document.getElementById('msg').innerText='Logging...';
+const{error}=await supabase.auth.signInWithPassword({email:e,password:p});
+if(error){document.getElementById('msg').innerText=error.message;return;}
+init();
+}
+function setActive(el){
+document.querySelectorAll('.menu-item').forEach(m=>m.classList.remove('active'));
+if(el)el.classList.add('active');
+}
+async function showModule(name){
+const items=document.querySelectorAll('.menu-item');
+items.forEach(e=>{if(e.textContent.toLowerCase().includes(name))setActive(e)});
+const c=document.getElementById('content');
+if(name==='overview')c.innerHTML=await overviewHTML();
+if(name==='buses'){c.innerHTML=busesHTML();loadBuses();}
+if(name==='routes'){c.innerHTML=routesHTML();loadRoutes();}
+if(name==='schedules'){c.innerHTML=schedulesHTML();loadSchedules();setTimeout(()=>{loadR();loadB();},500);}
+if(name==='bookings'){c.innerHTML=await bookingsHTML();}
+if(name==='payments'){c.innerHTML=await paymentsHTML();}
+if(name==='earnings'){c.innerHTML=await earningsHTML();}
+}
+async function overviewHTML(){
+const{data:buses}=await supabase.from('buses').select('*');
+const{data:bookings}=await supabase.from('bookings').select('*');
+const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;
+return '<h1>Overview</h1><p>Welcome '+(currentCompany?.company_name||'')+'</p><div class="grid3"><div class="card"><div>Gross</div><div style="font-size:28px;font-weight:800">UGX '+total.toLocaleString()+'</div></div><div class="card"><div>Buses</div><div style="font-size:28px;font-weight:800">'+(buses?.length||0)+'</div></div><div class="card"><div>Bookings</div><div style="font-size:28px;font-weight:800">'+(bookings?.length||0)+'</div></div></div><div class="card"><p>Linked online via Supabase MTN Airtel Live</p></div>';
+}
+function busesHTML(){
+return '<div class="card"><h2>Buses</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><input id="plate" placeholder="Plate"><input id="busName" placeholder="Name"><input id="seats" type="number" placeholder="45"><button onclick="addBus()">Add</button></div></div><div class="card"><table><tr><th>Plate</th><th>Name</th><th>Seats</th><th>Action</th></tr><tbody id="busesList"></tbody></table></div>';
+}
+async function loadBuses(){
+const{data}=await supabase.from('buses').select('*').order('created_at',{ascending:false});
+let h='';
+(data||[]).forEach(b=>{
+h+='<tr><td>'+b.plate_number+'</td><td>'+b.bus_name+'</td><td>'+b.total_seats+'</td><td><button onclick="deleteBus(\''+b.id+'\')">Delete</button></td></tr>';
+});
+document.getElementById('busesList').innerHTML=h||'<tr><td colspan=4>No buses</td></tr>';
+}
+async function addBus(){
+const p=document.getElementById('plate').value;
+const n=document.getElementById('busName').value;
+const s=document.getElementById('seats').value;
+if(!p)return alert('Plate required');
+await supabase.from('buses').insert([{plate_number:p,bus_name:n,total_seats:parseInt(s)||45,company_id:currentCompany.id}]);
+loadBuses();
+}
+async function deleteBus(id){
+await supabase.from('buses').delete().eq('id',id);
+loadBuses();
+}
+function routesHTML(){
+return '<div class="card"><h2>Routes</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><input id="fromC" placeholder="From"><input id="toC" placeholder="To"><input id="price" type="number" placeholder="35000"><button onclick="addRoute()">Add</button></div></div><div class="card"><div id="routesList"></div></div>';
+}
+async function loadRoutes(){
+const{data}=await supabase.from('routes').select('*').order('created_at',{ascending:false});
+let h='';
+(data||[]).forEach(r=>{
+h+='<div style="padding:10px;border-bottom:1px solid #eee;display:flex;justify-content:space-between"><span>'+r.from_city+' to '+r.to_city+' - UGX '+r.price+'</span><button onclick="deleteRoute(\''+r.id+'\')">Delete</button></div>';
+});
+document.getElementById('routesList').innerHTML=h||'No routes';
+}
+async function addRoute(){
+const f=document.getElementById('fromC').value;
+const t=document.getElementById('toC').value;
+const p=document.getElementById('price').value;
+if(!f||!t)return alert('Required');
+await supabase.from('routes').insert([{from_city:f,to_city:t,price:parseInt(p)||0,company_id:currentCompany.id}]);
+loadRoutes();
+}
+async function deleteRoute(id){
+await supabase.from('routes').delete().eq('id',id);
+loadRoutes();
+}
+function schedulesHTML(){
+return '<div class="card"><h2>Schedules</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><select id="schedRoute"></select><select id="schedBus"></select><input id="dep" type="datetime-local"><button onclick="addSchedule()">Add</button></div></div><div class="card"><div id="schedList"></div></div>';
+}
+async function loadR(){
+const{data}=await supabase.from('routes').select('*');
+const sel=document.getElementById('schedRoute');
+if(sel)sel.innerHTML=(data||[]).map(r=>'<option value="'+r.id+'">'+r.from_city+' to '+r.to_city+'</option>').join('');
+}
+async function loadB(){
+const{data}=await supabase.from('buses').select('*');
+const sel=document.getElementById('schedBus');
+if(sel)sel.innerHTML=(data||[]).map(b=>'<option value="'+b.id+'">'+b.plate_number+'</option>').join('');
+}
+async function loadSchedules(){
+const{data}=await supabase.from('schedules').select('*,routes(from_city,to_city),buses(plate_number)').order('departure_time',{ascending:true});
+let h='';
+(data||[]).forEach(s=>{
+h+='<div style="padding:10px;border-bottom:1px solid #eee">'+(s.routes?.from_city||'')+' to '+(s.routes?.to_city||'')+' | '+(s.buses?.plate_number||'')+' | '+new Date(s.departure_time).toLocaleString()+' <button onclick="deleteSched(\''+s.id+'\')">Del</button></div>';
+});
+document.getElementById('schedList').innerHTML=h||'No schedules';
+}
+async function addSchedule(){
+const r=document.getElementById('schedRoute').value;
+const b=document.getElementById('schedBus').value;
+const d=document.getElementById('dep').value;
+await supabase.from('schedules').insert([{route_id:r,bus_id:b,departure_time:d,company_id:currentCompany.id}]);
+loadSchedules();
+}
+async function deleteSched(id){
+await supabase.from('schedules').delete().eq('id',id);
+loadSchedules();
+}
+async function bookingsHTML(){
+const{data}=await supabase.from('bookings').select('*').order('created_at',{ascending:false});
+let rows='';
+(data||[]).forEach(b=>{
+rows+='<tr><td>'+(b.passenger_name||'')+'</td><td>'+(b.seat_number||'')+'</td><td>UGX '+(b.amount||0)+'</td><td>'+b.status+'</td></tr>';
+});
+return '<div class="card"><h2>Bookings</h2><table><tr><th>Passenger</th><th>Seat</th><th>Amount</th><th>Status</th></tr>'+(rows||'<tr><td colspan=4>No bookings</td></tr>')+'</table></div>';
+}
+async function paymentsHTML(){
+const{data:bookings}=await supabase.from('bookings').select('*');
+const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;
+return '<div class="card"><h2>Payments MTN MoMo Airtel</h2><div style="background:#f0fdf4;padding:16px;border-radius:12px">Gross Base: <b>UGX '+total.toLocaleString()+'</b></div></div>';
+}
+async function earningsHTML(){
+const{data:bookings}=await supabase.from('bookings').select('*');
+const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;
+return '<div class="card"><h2>Earnings</h2><div class="grid3"><div style="background:#eff6ff;padding:20px;border-radius:12px"><div>Total</div><b style="font-size:24px">UGX '+total.toLocaleString()+'</b></div><div style="background:#f0fdf4;padding:20px;border-radius:12px"><div>Net 90%</div><b style="font-size:24px">UGX '+Math.round(total*0.9).toLocaleString()+'</b></div><div style="background:#fefce8;padding:20px;border-radius:12px"><div>Fee 10%</div><b style="font-size:24px">UGX '+Math.round(total*0.1).toLocaleString()+'</b></div></div></div>';
+}
+init();
+</script>
+</body>
+</html>
