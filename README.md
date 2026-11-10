@@ -1,32 +1,57 @@
-# Daily Travel Uganda
+# Daily Travel Supabase backend
 
-The package preserves the existing Daily Travel client and admin UI and adds schema-compatible Supabase integration without running database migrations.
+This directory contains the production backend pieces for booking, realtime updates, payment initiation/status callbacks, and PDF receipts.
 
-## Current integration
+## Database migrations
 
-- Supabase publishable client initialization in both HTML apps.
-- Customer/company Supabase Auth sign-in and sign-up attempts.
-- Live company, route, schedule, seat, booking, payment, and ticket reads when data exists.
-- Customer/company profile writes using the live schema column names.
-- Booking writes with required fare/charge fields plus related payment and ticket records.
-- Admin reads for companies, payments, audit logs, payout settings, and support settings.
-- Admin persistence for company approvals/statuses, payout settings, support settings, account updates, and audit logs.
-- Existing demo data remains as a fallback when the live catalog is empty.
+The connected project has applied both:
 
-## Supabase project
+- `20261110_realtime_booking_payments.sql` for Realtime, atomic seat reservation, and payment finalization;
+- `20261110_rls_hardening.sql` for identity-scoped policies.
 
-The HTML files use the existing Daily Travel Supabase project and only the browser-safe publishable key. Never place a secret/service-role key in HTML or GitHub.
+Keep both migrations in source control. They do not seed credentials or open anonymous write access.
 
-## Safe setup
+## Edge Functions
 
-1. Keep the GitHub repository private.
-2. Do **not** run `supabase_schema_final.sql` against the existing project. It is a reference schema with permissive anonymous policies and columns that do not match the live database.
-3. Run `verify_live_schema.sql` in the Supabase SQL Editor for a read-only baseline.
-4. Create or invite an admin user in Supabase Auth; the admin HTML does not ship with a default password.
-5. Import the private repository into Vercel as a static site. The client is `/` or `/index.html`; the admin is `/admin.html`.
-6. Add the Vercel production URL to Supabase Auth Site URL and redirect allow-list.
-7. Replace the current permissive anonymous policies with least-privilege RLS policies before production.
+Deploy these to the existing Supabase project:
 
-## Important limitation
+- `payment-initiate`
+- `payment-status`
+- `payment-webhook` (JWT verification disabled because providers call it)
+- `receipt-download`
 
-The existing booking UI still simulates payment confirmation in the browser. Real MTN/Airtel collection, callbacks, reconciliation, and merchant disbursement must be implemented server-side before accepting money. Browser success state is not proof of payment.
+## Required Supabase secrets
+
+Never put these in the HTML app:
+
+```text
+MTN_BASE_URL=https://sandbox.momodeveloper.mtn.com
+MTN_TARGET_ENVIRONMENT=sandbox
+MTN_COLLECTION_SUBSCRIPTION_KEY=...
+MTN_API_USER=...
+MTN_API_KEY=...
+
+AIRTEL_BASE_URL=https://openapi.airtel.africa
+AIRTEL_COUNTRY=UG
+AIRTEL_CLIENT_ID=...
+AIRTEL_CLIENT_SECRET=...
+AIRTEL_PAYMENT_PATH=/merchant/v1/payments/
+AIRTEL_PAYMENT_STATUS_PATH=/standard/v1/payments/
+
+PAYMENT_WEBHOOK_SECRET=...
+```
+
+Use production provider URLs and credentials only after sandbox testing. The Airtel endpoint and payload must be confirmed against the Uganda application in the Airtel developer portal before production activation.
+
+The Edge Functions use the Supabase project URL and server key supplied by the Supabase runtime. Do not copy a service-role key into the browser.
+
+## Payment activation sequence
+
+1. Apply the migration.
+2. Deploy the functions.
+3. Configure the secrets in Supabase Edge Function settings.
+4. Configure the provider callback URL as:
+   `https://<project-ref>.supabase.co/functions/v1/payment-webhook`
+5. Test MTN and Airtel in sandbox.
+6. Confirm successful callbacks update `payments`, `bookings`, `schedule_seats`, and `tickets`.
+7. Only then switch to production provider credentials.

@@ -4,7 +4,7 @@ This package contains the existing Daily Travel UI plus a Supabase-connected cli
 
 ## Important safety warning
 
-The supplied `supabase_schema_final.sql` is a reference file, not a safe migration for the existing Daily Travel Supabase project. The live project already has a different schema, existing rows, and permissive anonymous policies. Running the file as-is can fail, overwrite the admin password, or expose every table to anonymous users.
+The supplied file is a reference schema, not a safe migration for the existing Daily Travel Supabase project. The live project already has a different schema, existing rows, and permissive anonymous policies. Running it as-is can fail or expose every table to anonymous users.
 
 Do not make the repository public. Do not paste service-role keys into HTML or GitHub. Rotate any real credentials that were included in the supplied files before production use.
 
@@ -52,25 +52,31 @@ If you intentionally start a completely new, disposable Supabase project, review
 
 GitHub stores source files. Supabase stores application data. Uploading a SQL file to GitHub does not execute it or connect the HTML apps to Supabase.
 
-The updated HTML files initialize the Supabase publishable client and expose `window.dailyTravelSupabase` and the compatibility bridge used by the existing bundle. The client now:
+The connected Supabase project now has the realtime/booking/payment migration applied. The client and admin apps:
 
-- attempts Supabase Auth sign-in/sign-up for customers and companies;
-- loads live companies, routes, schedules, seats, bookings, payments, and tickets when rows exist;
-- writes customer/company profiles using the live column names;
-- writes bookings with the live required fare/charge fields and creates related payment/ticket rows;
-- retains the bundled demo catalog only when the live catalog is empty.
+- use Supabase Auth for customer, company, and admin sessions;
+- load live companies, routes, schedules, seats, bookings, payments, and tickets;
+- subscribe to live booking, payment, ticket, company, and admin changes;
+- reserve seats atomically through `reserve_booking`;
+- finalize seats and tickets only through trusted payment finalization;
+- request server-generated PDF receipts after successful payment.
 
-The admin now loads live companies, payments, audit logs, payout settings, and support settings, and persists company status changes, payout settings, support settings, account updates, and audit logs.
+The live database currently has no schedules, so the client keeps demo schedules as a fallback. Create live routes, schedules, and schedule seats with UUIDs before testing relational bookings across devices.
 
-This is not a payment gateway implementation: the existing UI still simulates payment confirmation in the browser. Real MTN/Airtel collection and callbacks must be implemented server-side before accepting money. The current live project also has permissive anonymous policies, so harden RLS before production.
+The Supabase Edge Functions are included under `supabase/functions/` and are deployed to the connected project. Provider credentials are intentionally not included.
 
-## 5. Auth and production security
+## 5. Auth, payment activation, and production security
 
 1. In Supabase Auth, create or invite an admin user. The admin HTML does not ship with a default password.
 2. Set the Supabase Auth Site URL and redirect allow-list to the deployed Vercel URL.
 3. Keep only the publishable key in the HTML. Never put a secret/service-role key in the repository or browser.
-4. Replace the current permissive anonymous policies with least-privilege RLS policies before production.
-5. Configure server-side MTN/Airtel payment initiation and trusted callbacks. Do not treat the browser’s simulated success state as proof of payment.
+4. Configure the MTN/Airtel secrets listed in `supabase/README.md` under Supabase Edge Function secrets.
+5. Configure the provider callback URL as `https://<project-ref>.supabase.co/functions/v1/payment-webhook` when supported.
+6. Test in provider sandbox first. Do not accept production funds until initiation, status polling, callbacks, idempotency, and refunds have been verified.
+7. Replace the current permissive anonymous policies with least-privilege RLS policies before production.
+8. Keep the browser out of payment confirmation: only the Edge Functions may mark a payment successful.
+
+Receipts become downloadable PDF files only after the corresponding payment is successfully finalized.
 
 ## 6. Vercel deployment after GitHub upload
 
@@ -91,5 +97,5 @@ After Vercel provides the production URL, add that URL to the Supabase Auth Site
 - The client and admin pages load from Vercel.
 - Supabase Auth redirect settings contain the real production URL.
 - A test record written through the app can be read back after a refresh.
-- RLS prevents anonymous users from reading or modifying other users’ private data.
+- After RLS hardening, anonymous users cannot read or modify other users’ private data.
 - Payment status is confirmed by a trusted server callback, not by a browser alert or local state.

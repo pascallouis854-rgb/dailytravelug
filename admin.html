@@ -11863,6 +11863,66 @@ function qi() {
       active = false;
     };
   }, []);
+  L.useEffect(() => {
+    const companyFromRow = (company) => ({
+      ...company,
+      mtn_code: company.merchant_mtn_code || "",
+      airtel_code: company.merchant_airtel_code || "",
+      registration_fee: company.registration_fee_amount || 0,
+      branches: company.branches || [],
+      photos: Array.isArray(company.photos) ? company.photos : [],
+    });
+    const paymentFromRow = (payment) => ({
+      ...payment,
+      ref: payment.provider_reference || payment.id,
+      booking_id: payment.booking_id || "",
+      customer: payment.customer_id || "",
+      company: payment.company_id || "",
+      base_amount: payment.base_amount || 0,
+      admin_amount: payment.admin_amount || 0,
+      total: payment.amount || 0,
+      method:
+        payment.payment_method === "airtel_money" ? "Airtel Money" : "MTN MoMo",
+      company_code: "",
+      admin_code: "",
+      disbursement_status: payment.settlement_status || "Pending",
+      timestamp: payment.created_at,
+      status: payment.status === "successful" ? "Successful" : payment.status,
+    });
+    const auditFromRow = (entry) => ({
+      ...entry,
+      details: entry.reason || "",
+      timestamp: entry.created_at,
+    });
+    const replaceRow = (setter, row, mapper, deleted) =>
+      setter((items) => {
+        if (deleted) return items.filter((item) => item.id !== row.id);
+        const mapped = mapper(row);
+        const exists = items.some((item) => item.id === mapped.id);
+        return exists
+          ? items.map((item) => (item.id === mapped.id ? { ...item, ...mapped } : item))
+          : [mapped, ...items];
+      });
+    const channel = dailyTravelSupabase
+      .channel("admin-live-updates")
+      .on("postgres_changes", { event: "*", schema: "public", table: "bus_companies" }, (payload) =>
+        replaceRow(d, payload.new || payload.old, companyFromRow, payload.eventType === "DELETE"),
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, (payload) =>
+        replaceRow(m, payload.new || payload.old, paymentFromRow, payload.eventType === "DELETE"),
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "audit_logs" }, (payload) =>
+        replaceRow(R, payload.new || payload.old, auditFromRow, payload.eventType === "DELETE"),
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "admin_settings" }, (payload) => {
+        if (payload.new?.mtn_merchant_code !== undefined) w(payload.new.mtn_merchant_code || "");
+        if (payload.new?.airtel_merchant_code !== undefined) D(payload.new.airtel_merchant_code || "");
+      })
+      .subscribe();
+    return () => {
+      dailyTravelSupabase.removeChannel(channel);
+    };
+  }, []);
   if (
     (L.useEffect(() => {
       if (Qr) document.body.style.overflow = "hidden";

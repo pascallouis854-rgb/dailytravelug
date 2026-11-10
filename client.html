@@ -2060,6 +2060,57 @@ const dailyTravelSupabaseBridge = {
   },
 };
 window.sb = dailyTravelSupabaseBridge;
+const dailyTravelFunctionsBase = `${DAILY_TRAVEL_SUPABASE_URL}/functions/v1`;
+const dailyTravelInvokeFunction = async (slug, body) => {
+  const {
+    data: { session },
+  } = await dailyTravelSupabase.auth.getSession();
+  if (!session) throw new Error("Please sign in before continuing");
+  const response = await fetch(`${dailyTravelFunctionsBase}/${slug}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+      apikey: DAILY_TRAVEL_SUPABASE_PUBLISHABLE_KEY,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+  return result;
+};
+const dailyTravelDownloadReceipt = async (booking) => {
+  try {
+    const {
+      data: { session },
+    } = await dailyTravelSupabase.auth.getSession();
+    if (!session) throw new Error("Please sign in before downloading a receipt");
+    const response = await fetch(
+      `${dailyTravelFunctionsBase}/receipt-download?booking_id=${encodeURIComponent(booking.id)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: DAILY_TRAVEL_SUPABASE_PUBLISHABLE_KEY,
+        },
+      },
+    );
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || "Receipt is not available yet");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `receipt-${booking.booking_reference || booking.id}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    alert(error.message || "Receipt download failed");
+  }
+};
 window.dailyTravelSupabaseConnection = dailyTravelSupabase
   .from("bus_companies")
   .select("id", { head: true, count: "exact" })
@@ -12075,6 +12126,116 @@ function co() {
       active = false;
     };
   }, [r]);
+  M.useEffect(() => {
+    if (!r || !dailyTravelIsUuid(r.id)) return undefined;
+    let active = true;
+    const refreshCustomerRecords = async () => {
+      const [{ data: bookings }, { data: payments }, { data: tickets }] =
+        await Promise.all([
+          dailyTravelSupabase
+            .from("bookings")
+            .select("*")
+            .eq("customer_id", r.id)
+            .order("created_at", { ascending: false }),
+          dailyTravelSupabase
+            .from("payments")
+            .select("*")
+            .eq("customer_id", r.id)
+            .order("created_at", { ascending: false }),
+          dailyTravelSupabase.from("tickets").select("*").order("created_at", { ascending: false }),
+        ]);
+      if (!active) return;
+      if (bookings) {
+        const ticketMap = Object.fromEntries(
+          (tickets || []).map((ticket) => [ticket.booking_id, ticket]),
+        );
+        xc(
+          bookings.map((booking) => ({
+            ...booking,
+            ticket_code: ticketMap[booking.id]?.ticket_code || "",
+            seat_numbers: Array.isArray(booking.seat_numbers)
+              ? booking.seat_numbers
+              : [],
+          })),
+        );
+      }
+      if (payments) {
+        wc(
+          payments.map((payment) => ({
+            ...payment,
+            method: payment.payment_method,
+            status: payment.status,
+          })),
+        );
+      }
+    };
+    const channel = dailyTravelSupabase
+      .channel(`customer-live-${r.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "bookings", filter: `customer_id=eq.${r.id}` },
+        refreshCustomerRecords,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "payments", filter: `customer_id=eq.${r.id}` },
+        refreshCustomerRecords,
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, refreshCustomerRecords)
+      .subscribe();
+    return () => {
+      active = false;
+      dailyTravelSupabase.removeChannel(channel);
+    };
+  }, [r]);
+  M.useEffect(() => {
+    if (!k || !dailyTravelIsUuid(k.id)) return undefined;
+    const applySeatChange = (payload) => {
+      const nextSeat = payload.new || payload.old;
+      if (!nextSeat?.seat_number) return;
+      const seat = String(nextSeat.seat_number);
+      const updateSchedule = (schedule) => {
+        if (schedule.id !== k.id) return schedule;
+        const booked = new Set(schedule.booked_seats || []);
+        const blocked = new Set(schedule.blocked_seats || []);
+        booked.delete(seat);
+        blocked.delete(seat);
+        if (nextSeat.status === "booked" || nextSeat.status === "held") booked.add(seat);
+        if (nextSeat.status === "blocked") blocked.add(seat);
+        return {
+          ...schedule,
+          booked_seats: Array.from(booked),
+          blocked_seats: Array.from(blocked),
+          seats_left:
+            nextSeat.status === "available"
+              ? Math.max(0, (schedule.seats_left || 0) + 1)
+              : Math.max(0, (schedule.seats_left || 0) - 1),
+        };
+      };
+      qo((items) => items.map(updateSchedule));
+      so((items) => items.map(updateSchedule));
+    };
+    const channel = dailyTravelSupabase
+      .channel(`schedule-live-${k.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "schedule_seats", filter: `schedule_id=eq.${k.id}` },
+        applySeatChange,
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "schedules", filter: `id=eq.${k.id}` },
+        (payload) => {
+          if (!payload.new) return;
+          qo((items) => items.map((item) => (item.id === k.id ? { ...item, ...payload.new } : item)));
+          so((items) => items.map((item) => (item.id === k.id ? { ...item, ...payload.new } : item)));
+        },
+      )
+      .subscribe();
+    return () => {
+      dailyTravelSupabase.removeChannel(channel);
+    };
+  }, [k?.id]);
   let kc = async () => {
       if (!N || !U) return alert("Enter email and password");
       try {
@@ -12259,104 +12420,124 @@ function co() {
       if (C.length !== _t) return alert(`Select ${_t} seat(s)`);
       (or(!1), ar(!0), To(null));
     },
-    Yc = () => {
+    Yc = async () => {
       if (!mo) return alert("Enter payer phone");
       if (!k) return;
-      (yo(!0),
-        setTimeout(async () => {
-          let o = k.fare * C.length,
-            h = Math.round(o * 0.02),
-            H = o,
-            Z = Se.find((jA) => jA.id === k.company_id),
-            HA =
-              ve === "mtn_momo"
-                ? Z?.mtn_momo_code || ""
-                : Z?.airtel_money_code || "",
-            Ye = ve === "mtn_momo" ? "DT-MTN-0001" : "DT-ATL-0001",
-            $ = {
-              id: "b" + Date.now(),
-              ticket_code: "TKT-" + Math.floor(1000 + Math.random() * 9000),
-              customer_id: r?.id || "u1",
-              company_id: k.company_id,
-              schedule_id: k.id,
-              seat_numbers: C,
-              base_fare: o - h,
-              admin_charge: h,
-              total_amount: H,
-              payment_method: ve,
-              status: "confirmed",
-              created_at: new Date().toISOString(),
-              company_merchant_code: HA,
-              admin_merchant_code: Ye,
-            },
-            Je = {
-              id: "p" + Date.now(),
-              booking_id: $.id,
-              amount: H,
-              base_amount: o - h,
-              admin_amount: h,
-              method: ve,
-              company_code: HA,
-              admin_code: Ye,
-              status: "successful",
-              created_at: new Date().toISOString(),
-            };
-          (xc([$, ...RA]),
-            wc([Je, ...fr]),
-            qo((jA) =>
-              jA.map((iA) =>
-                iA.id === k.id
-                  ? {
-                      ...iA,
-                      booked_seats: [...iA.booked_seats, ...C],
-                      seats_left: iA.seats_left - C.length,
-                    }
-                  : iA,
-              ),
-            ),
-            so((jA) =>
-              jA.map((iA) =>
-                iA.id === k.id
-                  ? {
-                      ...iA,
-                      booked_seats: [...iA.booked_seats, ...C],
-                      seats_left: iA.seats_left - C.length,
-                    }
-                  : iA,
-              ),
-            ));
-          try {
-            await en.current
-              ?.from("bookings")
-              ?.insert?.({
-                customer_id: $.customer_id,
-                company_id: $.company_id,
-                schedule_id: $.schedule_id,
-                seat_numbers: $.seat_numbers,
-                passenger_count: C.length,
-                passenger_details: [{ name: r?.full_name || "Customer", phone: mo }],
-                base_fare: $.base_fare,
-                admin_charge: $.admin_charge,
-                flutterwave_charge: 0,
-                total_amount: $.total_amount,
-                currency: "UGX",
-                payment_method: ve,
-                status: "confirmed",
-                payment_status: "successful",
-              });
-          } catch (error) {
-            console.warn("Booking save failed", error);
+      if (!r || !dailyTravelIsUuid(r.id))
+        return alert("Please sign in with your customer account before paying");
+      if (!dailyTravelIsUuid(k.id) || !dailyTravelIsUuid(k.company_id))
+        return alert("This demo schedule is not connected to a live schedule yet");
+      yo(!0);
+      try {
+        const base = k.fare * C.length;
+        const admin = Math.round(base * 0.02);
+        const total = base;
+        const { data: reserved, error: reserveError } =
+          await dailyTravelSupabase.rpc("reserve_booking", {
+            p_company_id: k.company_id,
+            p_schedule_id: k.id,
+            p_route_id: dailyTravelIsUuid(k.route_id) ? k.route_id : null,
+            p_customer_id: r.id,
+            p_seat_numbers: C,
+            p_passenger_count: C.length,
+            p_base_fare: base - admin,
+            p_admin_charge: admin,
+            p_flutterwave_charge: 0,
+            p_total_amount: total,
+            p_currency: "UGX",
+            p_payment_method: ve,
+            p_passenger_details: [{ name: r.full_name || "Customer", phone: mo }],
+          });
+        if (reserveError) throw new Error(reserveError.message);
+        const paymentId = reserved?.payment?.id;
+        if (!paymentId) throw new Error("Booking payment could not be created");
+        await dailyTravelInvokeFunction("payment-initiate", {
+          payment_id: paymentId,
+          phone: mo,
+        });
+        let result = null;
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          const status = await dailyTravelInvokeFunction("payment-status", {
+            payment_id: paymentId,
+          });
+          if (status.status === "successful" || status.status === "failed") {
+            result = status;
+            break;
           }
-          (yo(!1),
-            To({
-              base: o - h,
-              admin: h,
-              company: k.company_name,
-              compCode: HA,
-              adminCode: Ye,
-              method: ve === "mtn_momo" ? "MTN MoMo" : "Airtel Money",
-            }));
-        }, 1500));
+        }
+        if (!result || result.status !== "successful") {
+          yo(!1);
+          return alert(
+            "Payment is still processing. Check Payment History shortly; the booking will only be confirmed after the provider confirms payment.",
+          );
+        }
+        const booking = result.result?.booking || reserved.booking;
+        const payment = result.result?.payment || reserved.payment;
+        const ticket = result.result?.tickets?.[0];
+        const Z = Se.find((company) => company.id === k.company_id);
+        const localBooking = {
+          ...booking,
+          id: booking.id,
+          ticket_code: ticket?.ticket_code || "",
+          payment_method: ve,
+          company_name: k.company_name,
+          company_merchant_code:
+            ve === "mtn_momo"
+              ? Z?.mtn_momo_code || ""
+              : Z?.airtel_money_code || "",
+          admin_merchant_code:
+            ve === "mtn_momo" ? "Configured in Supabase" : "Configured in Supabase",
+        };
+        const localPayment = {
+          ...payment,
+          booking_id: booking.id,
+          method: ve,
+          status: "successful",
+          amount: total,
+          base_amount: base - admin,
+          admin_amount: admin,
+        };
+        xc([localBooking, ...RA]);
+        wc([localPayment, ...fr]);
+        qo((items) =>
+          items.map((item) =>
+            item.id === k.id
+              ? {
+                  ...item,
+                  booked_seats: [...item.booked_seats, ...C],
+                  seats_left: item.seats_left - C.length,
+                }
+              : item,
+          ),
+        );
+        so((items) =>
+          items.map((item) =>
+            item.id === k.id
+              ? {
+                  ...item,
+                  booked_seats: [...item.booked_seats, ...C],
+                  seats_left: item.seats_left - C.length,
+                }
+              : item,
+          ),
+        );
+        yo(!1);
+        To({
+          base: base - admin,
+          admin,
+          company: k.company_name,
+          compCode:
+            ve === "mtn_momo"
+              ? Z?.mtn_momo_code || ""
+              : Z?.airtel_money_code || "",
+          adminCode: "Configured in Supabase",
+          method: ve === "mtn_momo" ? "MTN MoMo" : "Airtel Money",
+        });
+      } catch (error) {
+        yo(!1);
+        alert(error.message || "Payment could not be started");
+      }
     },
     Yl = k ? k.fare * C.length : 0,
     Jc = () => {
@@ -13968,13 +14149,15 @@ function co() {
                                                 className: "flex gap-2 mt-3",
                                                 children: [
                                                   c("button", {
+                                                    onClick: () =>
+                                                      dailyTravelDownloadReceipt(o),
                                                     className:
                                                       "bg-[#0798E3] text-white text-[11px] px-3 py-1.5 rounded-full flex items-center gap-1",
                                                     children: [
                                                       f(tr, {
                                                         className: "w-3 h-3",
                                                       }),
-                                                      "PDF receipt",
+                                                      "Download PDF",
                                                     ],
                                                   }),
                                                   c("span", {
