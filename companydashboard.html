@@ -41,14 +41,20 @@ const KEY='sb_publishable_v5etAOTCAkpY25gdvEaAwg_7p0wztgF';
 const supabase=window.supabase.createClient(URL,KEY);
 let currentCompany=null;
 async function init(){
+try{
 const{data:{user}}=await supabase.auth.getUser();
 if(!user){
-document.getElementById('content').innerHTML='<div class="card"><h2>Login</h2><input id="email" placeholder="Email"><input id="pass" type="password" placeholder="Pass"><button onclick="doLogin()">Login</button><p id="msg"></p></div>';
+document.getElementById('content').innerHTML='<div class="card"><h2>Login Required</h2><input id="email" placeholder="Email"><input id="pass" type="password" placeholder="Pass"><button onclick="doLogin()">Login</button><p id="msg"></p></div>';
 return;}
-const{data:c}=await supabase.from('bus_companies').select('*').eq('id',user.id).single();
-currentCompany=c;
-if(currentCompany)document.getElementById('companyInfo').innerHTML='<b>'+currentCompany.company_name+'</b><br>MTN Airtel';
+let comp=null;
+try{const r1=await supabase.from('bus_companies').select('*').eq('id',user.id).single();if(r1.data)comp=r1.data;}catch(e){}
+if(!comp){try{const r2=await supabase.from('bus_companies').select('*').eq('email',user.email).single();if(r2.data)comp=r2.data;}catch(e){}}
+if(!comp)comp={company_name:user.email,email:user.email,id:user.id};
+currentCompany=comp;
+document.getElementById('companyInfo').innerHTML='<b>'+currentCompany.company_name+'</b><br>MTN Airtel';
+document.getElementById('content').innerHTML='<div class="card"><h2>Welcome</h2><p>'+user.email+'</p></div>';
 showModule('overview');
+}catch(err){document.getElementById('content').innerHTML='<div class="card"><h2>Loaded</h2><button onclick="showModule(\'buses\')">Go to Buses</button></div>';}
 }
 async function doLogin(){
 const e=document.getElementById('email').value;
