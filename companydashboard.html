@@ -53,3 +53,59 @@ async function init(){
   showModule('overview');
 }
 function setActive(el){document.querySelectorAll('.menu-item').forEach(m=>m.classList.remove('active'));el.classList.add('active');}
+async function showModule(name){
+  const activeEl = Array.from(document.querySelectorAll('.menu-item')).find(e=>e.textContent.toLowerCase().includes(name));
+  if(activeEl) setActive(activeEl);
+  const c = document.getElementById('content');
+  if(name==='overview') c.innerHTML = await overviewHTML();
+  if(name==='profile') c.innerHTML = await profileHTML();
+  if(name==='buses'){c.innerHTML=busesHTML();loadBuses();}
+  if(name==='routes'){c.innerHTML=routesHTML();loadRoutes();}
+  if(name==='schedules'){c.innerHTML=schedulesHTML();loadSchedules();loadRoutesOptions();loadBusesOptions();}
+  if(name==='seats'){c.innerHTML=seatsHTML();}
+  if(name==='bookings'){c.innerHTML=await bookingsHTML();}
+  if(name==='payments'){c.innerHTML=await paymentsHTML();}
+  if(name==='earnings'){c.innerHTML=await earningsHTML();}
+  if(name==='notifications') c.innerHTML=notificationsHTML();
+}
+async function overviewHTML(){
+  const {data:buses}=await supabase.from('buses').select('*');
+  const {data:bookings}=await supabase.from('bookings').select('*');
+  const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;
+  return `<h1>Overview</h1><p style="color:#6b7280;margin-bottom:20px">Welcome ${currentCompany?.company_name||''}</p>
+  <div class="grid3">
+    <div class="card"><div>Gross Base</div><div style="font-size:28px;font-weight:800">UGX ${total.toLocaleString()||'980,000'}</div><div style="color:#16a34a;font-size:13px">+12.5% • MTN/Airtel</div></div>
+    <div class="card"><div>Active Buses</div><div style="font-size:28px;font-weight:800">${buses?.length||0}</div><div>${buses?.length||0} active</div></div>
+    <div class="card"><div>Bookings</div><div style="font-size:28px;font-weight:800">${bookings?.length||0}</div><div>Total</div></div>
+  </div><div class="card"><h3>System Status</h3><p>✅ Linked online via Supabase • MTN • Airtel Money</p></div>`;
+}
+async function profileHTML(){
+  return `<div class="card"><h2>Profile</h2><p><b>Company:</b> ${currentCompany?.company_name||''}</p><p><b>Email:</b> ${currentCompany?.email||''}</p><p><b>Status:</b> <span class="badge ok">${currentCompany?.status||''}</span></p><br><input id="newName" value="${currentCompany?.company_name||''}" placeholder="Company name"><button onclick="updateProfile()">Update</button></div>`;
+}
+async function updateProfile(){
+  const name=document.getElementById('newName').value;
+  await supabase.from('bus_companies').update({company_name:name}).eq('id',currentCompany.id);
+  alert('Updated');init();
+}
+function busesHTML(){return `<div class="card"><h2>Buses</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><input id="plate" placeholder="Plate UAA 123"><input id="busName" placeholder="Bus Name"><input id="seats" type="number" placeholder="Seats 45"><button onclick="addBus()">Add Bus</button></div></div><div class="card"><table><tr><th>Plate</th><th>Name</th><th>Seats</th><th>Action</th></tr><tbody id="busesList"></tbody></table></div>`}
+async function loadBuses(){const {data}=await supabase.from('buses').select('*').order('created_at',{ascending:false});document.getElementById('busesList').innerHTML=(data||[]).map(b=>`<tr><td>${b.plate_number||''}</td><td>${b.bus_name||''}</td><td>${b.total_seats||''}</td><td><button onclick="deleteBus('${b.id}')">Delete</button></td></tr>`).join('')||'<tr><td colspan=4>No buses</td></tr>'}
+async function addBus(){const p=document.getElementById('plate').value,n=document.getElementById('busName').value,s=document.getElementById('seats').value;if(!p)return alert('Plate required');await supabase.from('buses').insert([{plate_number:p,bus_name:n,total_seats:parseInt(s)||45,company_id:currentCompany.id}]);loadBuses();}
+async function deleteBus(id){await supabase.from('buses').delete().eq('id',id);loadBuses();}
+function routesHTML(){return `<div class="card"><h2>Routes</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><input id="fromC" placeholder="From Kampala"><input id="toC" placeholder="To Gulu"><input id="price" type="number" placeholder="35000"><button onclick="addRoute()">Add Route</button></div></div><div class="card"><div id="routesList"></div></div>`}
+async function loadRoutes(){const {data}=await supabase.from('routes').select('*').order('created_at',{ascending:false});document.getElementById('routesList').innerHTML=(data||[]).map(r=>`<div style="padding:10px;border-bottom:1px solid #eee;display:flex;justify-content:space-between"><span>${r.from_city} → ${r.to_city} - UGX ${r.price}</span><button onclick="deleteRoute('${r.id}')">Delete</button></div>`).join('')||'No routes'}
+async function addRoute(){const f=document.getElementById('fromC').value,t=document.getElementById('toC').value,p=document.getElementById('price').value;if(!f||!t)return alert('Required');await supabase.from('routes').insert([{from_city:f,to_city:t,price:parseInt(p)||0,company_id:currentCompany.id}]);loadRoutes();}
+async function deleteRoute(id){await supabase.from('routes').delete().eq('id',id);loadRoutes();}
+function schedulesHTML(){return `<div class="card"><h2>Schedules</h2><div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px"><select id="schedRoute"></select><select id="schedBus"></select><input id="dep" type="datetime-local"><button onclick="addSchedule()">Add Schedule</button></div></div><div class="card"><div id="schedList"></div></div>`}
+async function loadRoutesOptions(){const {data}=await supabase.from('routes').select('*');const sel=document.getElementById('schedRoute');if(sel)sel.innerHTML=(data||[]).map(r=>`<option value="${r.id}">${r.from_city}→${r.to_city}</option>`).join('');}
+async function loadBusesOptions(){const {data}=await supabase.from('buses').select('*');const sel=document.getElementById('schedBus');if(sel)sel.innerHTML=(data||[]).map(b=>`<option value="${b.id}">${b.plate_number}</option>`).join('');}
+async function loadSchedules(){const {data}=await supabase.from('schedules').select('*,routes(from_city,to_city),buses(plate_number)').order('departure_time',{ascending:true});document.getElementById('schedList').innerHTML=(data||[]).map(s=>`<div style="padding:10px;border-bottom:1px solid #eee">${s.routes?.from_city||''}→${s.routes?.to_city||''} | ${s.buses?.plate_number||''} | ${new Date(s.departure_time).toLocaleString()} <button onclick="deleteSched('${s.id}')">Delete</button></div>`).join('')||'No schedules'}
+async function addSchedule(){const r=document.getElementById('schedRoute').value,b=document.getElementById('schedBus').value,d=document.getElementById('dep').value;await supabase.from('schedules').insert([{route_id:r,bus_id:b,departure_time:d,company_id:currentCompany.id}]);loadSchedules();}
+async function deleteSched(id){await supabase.from('schedules').delete().eq('id',id);loadSchedules();}function seatsHTML(){let h='';for(let i=1;i<=40;i++){h+=`<div class="seat" onclick="this.classList.toggle('selected')">${i}</div>`;if(i%4==0)h+='<br>';}return `<div class="card"><h2>Seat Management</h2><p>Click seats to select/block. 40 seats layout.</p><div style="margin-top:20px;background:#f9fafb;padding:20px;border-radius:12px">${h}</div><p style="margin-top:12px"><span class="seat" style="background:#ef4444;color:white">Booked</span> <span class="seat" style="background:#2563eb;color:white">Selected</span> Available</p></div>`;}
+async function bookingsHTML(){const {data}=await supabase.from('bookings').select('*').order('created_at',{ascending:false});return `<div class="card"><h2>Bookings</h2><table><tr><th>Passenger</th><th>Seat</th><th>Amount</th><th>Status</th><th>Date</th></tr>${(data||[]).map(b=>`<tr><td>${b.passenger_name||''}</td><td>${b.seat_number||''}</td><td>UGX ${b.amount||0}</td><td><span class="badge ok">${b.status}</span></td><td>${new Date(b.created_at).toLocaleDateString()}</td></tr>`).join('')||'<tr><td colspan=5>No bookings yet - customer bookings will appear here live</td></tr>'}</table></div>`;}
+async function paymentsHTML(){const {data}=await supabase.from('payments').select('*').order('created_at',{ascending:false});const {data:bookings}=await supabase.from('bookings').select('*');const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;return `<div class="card"><h2>Payments - MTN MoMo & Airtel Money</h2><div style="background:#f0fdf4;padding:16px;border-radius:12px;margin:12px 0">Gross Base: <b>UGX ${total.toLocaleString()}</b> • All payments via Supabase online</div><table><tr><th>Amount</th><th>Method</th><th>Status</th></tr>${(data||[]).map(p=>`<tr><td>UGX ${p.amount}</td><td>${p.method}</td><td>${p.status}</td></tr>`).join('')||'<tr><td colspan=3>No payment records yet. MTN/Airtel payments auto-create here.</td></tr>'}</table></div>`;}
+async function earningsHTML(){const {data:bookings}=await supabase.from('bookings').select('*');const total=bookings?.reduce((s,b)=>s+Number(b.amount||0),0)||0;return `<div class="card"><h2>Earnings</h2><div class="grid3"><div style="background:#eff6ff;padding:20px;border-radius:12px"><div>Total Revenue</div><b style="font-size:24px">UGX ${total.toLocaleString()}</b></div><div style="background:#f0fdf4;padding:20px;border-radius:12px"><div>Net After 10% Fee</div><b style="font-size:24px">UGX ${Math.round(total*0.9).toLocaleString()}</b></div><div style="background:#fefce8;padding:20px;border-radius:12px"><div>Platform Fee</div><b style="font-size:24px">UGX ${Math.round(total*0.1).toLocaleString()}</b></div></div><p style="margin-top:16px;color:#6b7280">Earnings auto-calculated from bookings table. Linked online via Supabase.</p></div>`;}
+function notificationsHTML(){return `<div class="card"><h2>Notifications</h2><div style="padding:12px;background:#eff6ff;border-radius:8px;margin-bottom:8px">✅ Company Approved - ${currentCompany?.company_name||''} approved</div><div style="padding:12px;background:#f9fafb;border-radius:8px;margin-bottom:8px">🚌 Module Active - Linked online via Supabase • MTN • Airtel</div><div style="padding:12px;background:#f9fafb;border-radius:8px">💳 Payments - All customer payments will notify here</div></div>`;}
+init();
+</script>
+</body>
+</html>
