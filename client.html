@@ -12320,11 +12320,19 @@ function co() {
             return;
           }
           if (t === "company") {
-            const { data: company } = await dailyTravelSupabase
+            let { data: company } = await dailyTravelSupabase
               .from("bus_companies")
               .select("*")
               .eq("owner_id", authData.user.id)
               .maybeSingle();
+            if (!company) {
+              const { data: byEmail } = await dailyTravelSupabase
+                .from("bus_companies")
+                .select("*")
+                .eq("email", N)
+                .maybeSingle();
+              company = byEmail || null;
+            }
             if (company) {
               if (company.approval_status !== "approved")
                 return alert("Company awaiting admin approval");
