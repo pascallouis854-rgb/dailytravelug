@@ -1,89 +1,193 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib@1.17.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 function secretKey() {
   const direct = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (direct) return direct;
-  try { return JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}").default; } catch { return undefined; }
+  try {
+    return JSON.parse(Deno.env.get("SUPABASE_SECRET_KEYS") || "{}").default;
+  } catch {
+    return undefined;
+  }
 }
-function publicKey() { return Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY"); }
-function errorResponse(message: string, status: number) { return new Response(JSON.stringify({ error: message }), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } }); }
-async function userFromRequest(req: Request) {
+
+function publicKey() {
+  return Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY");
+}
+
+function phoneDigits(value: string) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("256")) return digits;
+  if (digits.startsWith("0")) return `256${digits.slice(1)}`;
+  return digits;
+}
+
+async function requireUser(req: Request) {
   const token = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-  const url = Deno.env.get("SUPABASE_URL"); const key = publicKey();
+  const url = Deno.env.get("SUPABASE_URL");
+  const key = publicKey();
   if (!token || !url || !key) return null;
-  const client = createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } } });
-  return (await client.auth.getUser(token)).data.user || null;
+  const client = createClient(url, key, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+  const { data } = await client.auth.getUser(token);
+  return data.user || null;
 }
-function text(value: unknown) { return String(value ?? ""); }
+
+async function mtnRequest(payment: any, booking: any, phone: string) {
+  const base = Deno.env.get("MTN_BASE_URL") || "https://sandbox.momodeveloper.mtn.com";
+  const subscriptionKey = Deno.env.get("MTN_COLLECTION_SUBSCRIPTION_KEY");
+  const apiUser = Deno.env.get("MTN_API_USER");
+  const apiKey = Deno.env.get("MTN_API_KEY");
+  const targetEnvironment = Deno.env.get("MTN_TARGET_ENVIRONMENT") || "sandbox";
+  if (!subscriptionKey || !apiUser || !apiKey) {
+    throw new Error("MTN payment secrets are not configured");
+  }
+  const tokenResponse = await fetch(`${base}/collection/token/`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${btoa(`${apiUser}:${apiKey}`)}`,
+      "Ocp-Apim-Subscription-Key": subscriptionKey,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+  if (!tokenResponse.ok) throw new Error(`MTN token request failed: ${tokenResponse.status}`);
+  const token = (await tokenResponse.json()).access_token;
+  const reference = crypto.randomUUID();
+  const requestResponse = await fetch(`${base}/collection/v1_0/requesttopay`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Reference-Id": reference,
+      "X-Target-Environment": targetEnvironment,
+      "Ocp-Apim-Subscription-Key": subscriptionKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      amount: String(payment.amount),
+      currency: payment.currency || "UGX",
+      externalId: booking.booking_reference,
+      payer: { partyIdType: "MSISDN", partyId: phoneDigits(phone) },
+      payerMessage: `Daily Travel ${booking.booking_reference}`,
+      payeeNote: "Daily Travel bus booking",
+    }),
+  });
+  if (!requestResponse.ok) {
+    throw new Error(`MTN payment request failed: ${requestResponse.status} ${await requestResponse.text()}`);
+  }
+  return { provider: "mtn_momo", reference, status: "PENDING" };
+}
+
+async function airtelRequest(payment: any, booking: any, phone: string) {
+  const base = Deno.env.get("AIRTEL_BASE_URL") || "https://openapi.airtel.africa";
+  const clientId = Deno.env.get("AIRTEL_CLIENT_ID");
+  const clientSecret = Deno.env.get("AIRTEL_CLIENT_SECRET");
+  if (!clientId || !clientSecret) {
+    throw new Error("Airtel payment secrets are not configured");
+  }
+  const tokenResponse = await fetch(`${base}/auth/oauth2/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: "grant_type=client_credentials",
+  });
+  if (!tokenResponse.ok) throw new Error(`Airtel token request failed: ${tokenResponse.status}`);
+  const token = (await tokenResponse.json()).access_token;
+  const reference = crypto.randomUUID();
+  const paymentResponse = await fetch(
+    `${base}${Deno.env.get("AIRTEL_PAYMENT_PATH") || "/merchant/v1/payments/"}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-Country": Deno.env.get("AIRTEL_COUNTRY") || "UG",
+        "X-Currency": payment.currency || "UGX",
+      },
+      body: JSON.stringify({
+        reference,
+        subscriber: {
+          country: Deno.env.get("AIRTEL_COUNTRY") || "UG",
+          currency: payment.currency || "UGX",
+          msisdn: phoneDigits(phone),
+        },
+        transaction: {
+          amount: payment.amount,
+          country: Deno.env.get("AIRTEL_COUNTRY") || "UG",
+          currency: payment.currency || "UGX",
+          id: reference,
+        },
+      }),
+    },
+  );
+  if (!paymentResponse.ok) {
+    throw new Error(`Airtel payment request failed: ${paymentResponse.status} ${await paymentResponse.text()}`);
+  }
+  return { provider: "airtel_money", reference, status: "PENDING" };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "GET") return errorResponse("GET required", 405);
+  if (req.method !== "POST") return json({ error: "POST required" }, 405);
+  let adminClient: any = null;
+  let paymentId: string | undefined;
   try {
-    const user = await userFromRequest(req);
-    if (!user) return errorResponse("Authentication required", 401);
-    const bookingId = new URL(req.url).searchParams.get("booking_id");
-    if (!bookingId) return errorResponse("booking_id is required", 400);
-    const url = Deno.env.get("SUPABASE_URL"); const key = secretKey();
-    if (!url || !key) return errorResponse("Supabase server secrets are not configured", 500);
+    const user = await requireUser(req);
+    if (!user) return json({ error: "Authentication required" }, 401);
+    const body = await req.json();
+    paymentId = body.payment_id;
+    const phone = body.phone;
+    if (!paymentId || !phone) return json({ error: "payment_id and phone are required" }, 400);
+    const url = Deno.env.get("SUPABASE_URL");
+    const key = secretKey();
+    if (!url || !key) return json({ error: "Supabase server secrets are not configured" }, 500);
     const admin = createClient(url, key);
-    const { data: booking, error: bookingError } = await admin.from("bookings").select("*").eq("id", bookingId).single();
-    if (bookingError || !booking) return errorResponse("Booking not found", 404);
+    adminClient = admin;
+    const { data: payment, error: paymentError } = await admin
+      .from("payments")
+      .select("*")
+      .eq("id", paymentId)
+      .single();
+    if (paymentError || !payment) return json({ error: "Payment not found" }, 404);
     const { data: profile } = await admin.from("users").select("role").eq("id", user.id).maybeSingle();
-    if (booking.customer_id !== user.id && profile?.role !== "admin") return errorResponse("Not allowed", 403);
-    const { data: payment } = await admin.from("payments").select("*").eq("booking_id", booking.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (!payment || payment.status !== "successful") return errorResponse("Receipt is available after successful payment", 409);
-    const { data: tickets } = await admin.from("tickets").select("ticket_code, seat_number, status").eq("booking_id", booking.id).order("seat_number");
-    const { data: company } = booking.company_id ? await admin.from("bus_companies").select("company_name, trading_name").eq("id", booking.company_id).maybeSingle() : { data: null };
-    const { data: schedule } = booking.schedule_id ? await admin.from("schedules").select("departure_datetime, arrival_datetime, route_id").eq("id", booking.schedule_id).maybeSingle() : { data: null };
-    const { data: route } = booking.route_id ? await admin.from("routes").select("origin_city, destination_city, origin_terminal, destination_terminal").eq("id", booking.route_id).maybeSingle() : { data: null };
-
-    const pdf = await PDFDocument.create();
-    const page = pdf.addPage([595, 842]);
-    const regular = await pdf.embedFont(StandardFonts.Helvetica);
-    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
-    const blue = rgb(0.03, 0.6, 0.89);
-    page.drawText("DAILY TRAVEL", { x: 48, y: 780, size: 22, font: bold, color: blue });
-    page.drawText("Official payment receipt", { x: 48, y: 754, size: 11, font: regular, color: rgb(0.35, 0.35, 0.35) });
-    page.drawLine({ start: { x: 48, y: 738 }, end: { x: 547, y: 738 }, thickness: 1, color: rgb(0.85, 0.85, 0.85) });
-    const lines = [
-      ["Booking reference", text(booking.booking_reference)],
-      ["Payment reference", text(payment.provider_reference || payment.id)],
-      ["Payment status", text(payment.status)],
-      ["Payment method", text(payment.payment_method)],
-      ["Payment date", new Date(payment.created_at || Date.now()).toLocaleString("en-UG")],
-      ["Company", text(company?.company_name || booking.company_id)],
-      ["Route", `${text(route?.origin_city || "")} → ${text(route?.destination_city || "")}`],
-      ["Departure", schedule?.departure_datetime ? new Date(schedule.departure_datetime).toLocaleString("en-UG") : ""],
-      ["Seats", (Array.isArray(booking.seat_numbers) ? booking.seat_numbers : []).join(", ")],
-      ["Base fare", `UGX ${Number(booking.base_fare || 0).toLocaleString("en-UG")}`],
-      ["Platform fee", `UGX ${Number(booking.admin_charge || 0).toLocaleString("en-UG")}`],
-      ["Total paid", `UGX ${Number(payment.amount || booking.total_amount || 0).toLocaleString("en-UG")}`],
-      ["Tickets", (tickets || []).map((ticket) => ticket.ticket_code).join(", ")],
-    ];
-    let y = 700;
-    for (const [label, value] of lines) {
-      page.drawText(label, { x: 48, y, size: 10, font: bold, color: rgb(0.25, 0.25, 0.25) });
-      page.drawText(value, { x: 210, y, size: 10, font: regular, color: rgb(0.1, 0.1, 0.1), maxWidth: 330 });
-      y -=  thirty;
-    }
-    page.drawText("Keep this receipt for your records.", { x: 48, y: 90, size: 10, font: regular, color: rgb(0.4, 0.4, 0.4) });
-    const bytes = await pdf.save();
-    return new Response(bytes, {
-      headers: {
-        ...corsHeaders,
-        "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="receipt-${booking.booking_reference}.pdf"`,
-      },
-    });
+    if (payment.customer_id !== user.id && profile?.role !== "admin") return json({ error: "Not allowed" }, 403);
+    const { data: booking } = await admin.from("bookings").select("*").eq("id", payment.booking_id).single();
+    if (!booking) return json({ error: "Booking not found" }, 404);
+    if (["successful", "failed", "refunded"].includes(payment.status)) return json({ payment });
+    const provider = payment.payment_method === "airtel_money" ? "airtel_money" : "mtn_momo";
+    const request = provider === "airtel_money"
+      ? await airtelRequest(payment, booking, phone)
+      : await mtnRequest(payment, booking, phone);
+    await admin.from("payments").update({
+      status: "processing",
+      provider_reference: request.reference,
+      provider_status: request.status,
+    }).eq("id", payment.id);
+    return json({ payment_id: payment.id, provider, provider_reference: request.reference, status: "processing" });
   } catch (error) {
     console.error(error);
-    return errorResponse(error instanceof Error ? error.message : "Receipt generation failed", 500);
+    if (adminClient && paymentId) {
+      await adminClient.rpc("finalize_payment", {
+        p_payment_id: paymentId,
+        p_success: false,
+        p_provider_status: "INITIATION_FAILED",
+      }).catch(() => undefined);
+    }
+    return json({ error: error instanceof Error ? error.message : "Payment initiation failed" }, 502);
   }
 });
-const thirty = 30;
