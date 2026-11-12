@@ -1930,136 +1930,26 @@ const dailyTravelHash = async (value) => {
   ).join("");
 };
 
-// Compatibility adapter for the existing bundle. It translates prototype field
-// names to the live schema and creates the related payment/ticket records.
-const dailyTravelSupabaseBridge = {
-  auth: dailyTravelSupabase.auth,
-  channel: (...args) => dailyTravelSupabase.channel(...args),
-  from(table) {
-    const builder = dailyTravelSupabase.from(table);
-    const originalInsert = builder.insert.bind(builder);
-    builder.insert = (values, options) => {
-      const rows = dailyTravelAsRows(values);
-      if (table === "users") {
-        return Promise.resolve()
-          .then(async () => {
-            const payload = await Promise.all(
-              rows.map(async (row) => {
-              const next = { ...row };
-              if (!dailyTravelIsUuid(next.id)) delete next.id;
-              delete next.password;
-              delete next.avatar;
-              next.profile_picture_url = next.profile_picture_url || null;
-              next.password_hash = await dailyTravelHash(next.password_hash);
-              return next;
-              }),
-            );
-            return originalInsert(payload, options);
-          });
-      }
-      if (table === "bus_companies") {
-        const payload = rows.map((row) => {
-          const next = { ...row };
-          next.merchant_mtn_code = next.merchant_mtn_code || next.mtn_momo_code || null;
-          next.merchant_airtel_code =
-            next.merchant_airtel_code || next.airtel_money_code || null;
-          next.operating_location = next.operating_location || next.location || null;
-          next.logo_url = next.logo_url || next.logo || null;
-          next.registration_number =
-            next.registration_number || next.regNo || null;
-          next.description = next.description || next.desc || null;
-          delete next.mtn_momo_code;
-          delete next.airtel_money_code;
-          delete next.location;
-          delete next.logo;
-          delete next.password;
-          delete next.regNo;
-          delete next.desc;
-          return next;
-        });
-        return originalInsert(payload, options);
-      }
-      if (table === "audit_logs") {
-        const payload = rows.map((row) => {
-          const next = { ...row };
-          delete next.id;
-          next.reason = next.reason || next.details || null;
-          next.created_at = next.created_at || next.timestamp || undefined;
-          delete next.details;
-          delete next.timestamp;
-          return next;
-        });
-        return originalInsert(payload, options);
-      }
-      if (table === "bookings") {
-        const source = rows[0] || {};
-        const payload = {
-          customer_id: dailyTravelIsUuid(source.customer_id)
-            ? source.customer_id
-            : null,
-          company_id: dailyTravelIsUuid(source.company_id)
-            ? source.company_id
-            : null,
-          branch_id: dailyTravelIsUuid(source.branch_id) ? source.branch_id : null,
-          schedule_id: dailyTravelIsUuid(source.schedule_id)
-            ? source.schedule_id
-            : null,
-          route_id: dailyTravelIsUuid(source.route_id) ? source.route_id : null,
-          passenger_count:
-            Number(source.passenger_count) || source.seat_numbers?.length || 1,
-          seat_numbers: source.seat_numbers || [],
-          passenger_details: source.passenger_details || [],
-          base_fare: Number(source.base_fare) || Number(source.total_amount) || 0,
-          admin_charge: Number(source.admin_charge) || 0,
-          flutterwave_charge: Number(source.flutterwave_charge) || 0,
-          total_amount: Number(source.total_amount) || 0,
-          currency: source.currency || "UGX",
-          status: source.status || "confirmed",
-          payment_status: source.payment_status || "successful",
-        };
-        return originalInsert(payload, options)
-          .select("id,booking_reference")
-          .single()
-          .then(async ({ data, error }) => {
-            if (!error && data?.id) {
-              await dailyTravelSupabase.from("payments").insert({
-                booking_id: data.id,
-                company_id: payload.company_id,
-                customer_id: payload.customer_id,
-                amount: payload.total_amount,
-                base_amount: payload.base_fare,
-                admin_amount: payload.admin_charge,
-                flutterwave_amount: payload.flutterwave_charge,
-                currency: payload.currency,
-                payment_method: source.payment_method || "mtn_momo",
-                provider_reference: source.provider_reference || data.booking_reference,
-                provider_status: "successful",
-                status: "successful",
-                settlement_status: "pending",
-              });
-              const seats = Array.isArray(payload.seat_numbers)
-                ? payload.seat_numbers
-                : [];
-              if (seats.length) {
-                await dailyTravelSupabase.from("tickets").insert(
-                  seats.map((seat) => ({
-                    booking_id: data.id,
-                    passenger_name: source.passenger_name || null,
-                    seat_number: String(seat),
-                    status: "valid",
-                  })),
-                );
-              }
-            }
-            return { data, error };
-          });
-      }
-      return originalInsert(values, options);
-    };
-    return builder;
-  },
-};
+// Plain Supabase client. Profiles are created by a database trigger on sign-up and bookings
+// only by the reserve_booking() function; the browser never writes money records.
+const dailyTravelSupabaseBridge = dailyTravelSupabase;
 window.sb = dailyTravelSupabaseBridge;
+const dailyTravelNotify = (message) => {
+  try {
+    console.error("[Daily Travel]", message);
+    let box = document.getElementById("dt-error-banner");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "dt-error-banner";
+      box.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#B71C1C;color:#fff;padding:10px 14px;border-radius:12px;font:13px system-ui;cursor:pointer";
+      box.title = "Tap to dismiss";
+      box.onclick = () => box.remove();
+      document.body.appendChild(box);
+    }
+    box.textContent = message;
+  } catch {}
+};
+window.dailyTravelNotify = dailyTravelNotify;
 const dailyTravelFunctionsBase = `${DAILY_TRAVEL_SUPABASE_URL}/functions/v1`;
 const dailyTravelInvokeFunction = async (slug, body) => {
   const {
@@ -11652,6 +11542,293 @@ function sc(A, e, t) {
 var se = m0,
   f = sc,
   c = sc;
+// ---- Company dashboard modules (live Supabase data) ----
+const dtFmt = (v) => {
+  if (!v) return "";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("en-UG", { dateStyle: "medium", timeStyle: "short" });
+};
+const dtMoney = (n) => "UGX " + Number(n || 0).toLocaleString("en-UG");
+const dtSeatList = (v) => (Array.isArray(v) ? v : []).join(", ");
+const dtRowStyle = { display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 0", borderBottom: "1px solid #F0F0F0", fontSize: 13, flexWrap: "wrap", alignItems: "center" };
+const dtCard = { background: "#fff", border: "1px solid #EEE", borderRadius: 16, padding: 20, marginBottom: 16 };
+const dtInput = { border: "1px solid #DDD", borderRadius: 10, padding: "8px 10px", fontSize: 13, minWidth: 0, width: "100%", height: 38, boxSizing: "border-box", background: "#fff", color: "#202124", flex: "none" };
+const dtBtn = (bg, fg) => ({ background: bg || "#0798E3", color: fg || "#fff", border: 0, borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
+
+function CompanyOps({ company, tab }) {
+  const h = M.createElement;
+  const cid = company && company.id;
+  const [data, setData] = M.useState({ buses: [], routes: [], schedules: [], bookings: [], payments: [], notifications: [], tickets: [] });
+  const [loading, setLoading] = M.useState(true);
+  const [error, setError] = M.useState("");
+  const [notice, setNotice] = M.useState("");
+  const [busForm, setBusForm] = M.useState({ registration_number: "", bus_type: "Standard", capacity: 45, layout: "2-3", staff_seats: "" });
+  const [routeForm, setRouteForm] = M.useState({ origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
+  const [schedForm, setSchedForm] = M.useState({ bus_id: "", route_id: "", departure: "", arrival: "", base_fare: "" });
+  const [profileForm, setProfileForm] = M.useState(null);
+  const [openSchedule, setOpenSchedule] = M.useState(null);
+  const [seats, setSeats] = M.useState([]);
+  const [ticketCode, setTicketCode] = M.useState("");
+  const [ticketResult, setTicketResult] = M.useState(null);
+
+  const sb = dailyTravelSupabase;
+  const fail = (what, err) => {
+    console.error(what, err);
+    setError(`${what}: ${err && err.message ? err.message : err}`);
+    setNotice("");
+  };
+  const ok = (msg) => { setError(""); setNotice(msg); };
+
+  const load = M.useCallback(async () => {
+    if (!cid) return;
+    const q = (t, order) => sb.from(t).select("*").eq("company_id", cid).order(order || "created_at", { ascending: false });
+    const [buses, routes, schedules, bookings, payments, notifications] = await Promise.all([
+      q("buses"), q("routes"), q("schedules", "departure_datetime"), q("bookings"), q("payments"), q("notifications"),
+    ]);
+    const firstError = [buses, routes, schedules, bookings, payments, notifications].find((r) => r.error);
+    if (firstError) fail("Could not load company data", firstError.error);
+    const bookingIds = (bookings.data || []).map((b) => b.id);
+    let tickets = [];
+    if (bookingIds.length) {
+      const t = await sb.from("tickets").select("*").in("booking_id", bookingIds);
+      if (t.error) fail("Could not load tickets", t.error); else tickets = t.data || [];
+    }
+    setData({
+      buses: buses.data || [], routes: routes.data || [], schedules: schedules.data || [],
+      bookings: bookings.data || [], payments: payments.data || [], notifications: notifications.data || [], tickets,
+    });
+    setLoading(false);
+  }, [cid]);
+
+  M.useEffect(() => { load(); }, [load]);
+  M.useEffect(() => {
+    if (!cid) return undefined;
+    let timer = null;
+    const refresh = () => { clearTimeout(timer); timer = setTimeout(load, 400); };
+    let channel = sb.channel(`company-live-${cid}`);
+    ["buses", "routes", "schedules", "bookings", "payments", "notifications", "tickets"].forEach((table) => {
+      const opts = { event: "*", schema: "public", table };
+      if (table !== "tickets") opts.filter = `company_id=eq.${cid}`;
+      channel = channel.on("postgres_changes", opts, refresh);
+    });
+    channel.subscribe();
+    return () => { clearTimeout(timer); sb.removeChannel(channel); };
+  }, [cid, load]);
+  M.useEffect(() => {
+    if (company && !profileForm) {
+      setProfileForm({
+        phone: company.phone || "", address: company.address || "", operating_location: company.operating_location || company.location || "",
+        description: company.description || "", rep_name: company.rep_name || "", rep_phone: company.rep_phone || "",
+        rep_email: company.rep_email || "", logo_url: company.logo_url || "",
+        merchant_mtn_code: company.merchant_mtn_code || company.mtn_momo_code || "",
+        merchant_airtel_code: company.merchant_airtel_code || company.airtel_money_code || "",
+      });
+    }
+  }, [company]);
+
+  const run = async (label, promise, success) => {
+    const { error: e } = await promise;
+    if (e) return fail(label, e);
+    ok(success || "Saved");
+    load();
+  };
+
+  const addBus = async () => {
+    if (!busForm.registration_number.trim()) return fail("Add bus", "Registration number is required");
+    const capacity = Math.max(1, Math.min(80, Number(busForm.capacity) || 45));
+    const staff = busForm.staff_seats.split(",").map((s) => s.trim()).filter(Boolean);
+    await run("Add bus", sb.from("buses").insert({
+      company_id: cid, registration_number: busForm.registration_number.trim(), bus_type: busForm.bus_type,
+      capacity, layout: busForm.layout, staff_seats: staff,
+    }), "Bus added");
+    setBusForm({ ...busForm, registration_number: "", staff_seats: "" });
+  };
+  const addRoute = async () => {
+    if (!routeForm.origin_city.trim() || !routeForm.destination_city.trim()) return fail("Add route", "Origin and destination are required");
+    await run("Add route", sb.from("routes").insert({
+      company_id: cid, origin_city: routeForm.origin_city.trim(), destination_city: routeForm.destination_city.trim(),
+      origin_terminal: routeForm.origin_terminal.trim() || null, destination_terminal: routeForm.destination_terminal.trim() || null,
+      distance_km: routeForm.distance_km ? Number(routeForm.distance_km) : null,
+      base_price: routeForm.base_price ? Number(routeForm.base_price) : null, status: "active",
+    }), "Route added");
+    setRouteForm({ origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
+  };
+  const addSchedule = async () => {
+    const route = data.routes.find((r) => r.id === schedForm.route_id);
+    const fare = Number(schedForm.base_fare || (route && route.base_price) || 0);
+    if (!schedForm.bus_id || !schedForm.route_id || !schedForm.departure) return fail("Add schedule", "Choose a bus, a route and a departure time");
+    if (!(fare > 0)) return fail("Add schedule", "Enter a fare");
+    await run("Add schedule", sb.from("schedules").insert({
+      company_id: cid, bus_id: schedForm.bus_id, route_id: schedForm.route_id,
+      departure_datetime: new Date(schedForm.departure).toISOString(),
+      arrival_datetime: schedForm.arrival ? new Date(schedForm.arrival).toISOString() : null,
+      base_fare: fare, status: "scheduled",
+    }), "Schedule published: seats were created automatically and customers can book it now");
+  };
+  const loadSeats = async (scheduleId) => {
+    setOpenSchedule(scheduleId);
+    const { data: rows, error: e } = await sb.from("schedule_seats").select("*").eq("schedule_id", scheduleId);
+    if (e) return fail("Could not load seats", e);
+    setSeats((rows || []).sort((a, b) => Number(a.seat_number) - Number(b.seat_number)));
+  };
+  const toggleSeat = async (seat) => {
+    if (seat.status === "held" || seat.status === "booked") return;
+    const next = seat.status === "blocked" ? "available" : "blocked";
+    const { error: e } = await sb.from("schedule_seats").update({ status: next }).eq("id", seat.id);
+    if (e) return fail("Could not update seat", e);
+    const updated = seats.map((s) => (s.id === seat.id ? { ...s, status: next } : s));
+    setSeats(updated);
+    await sb.from("schedules").update({ available_seats: updated.filter((s) => s.status === "available").length }).eq("id", seat.schedule_id);
+    load();
+  };
+  const verifyTicket = async () => {
+    const code = ticketCode.trim();
+    if (!code) return;
+    const { data: row, error: e } = await sb.from("tickets").select("*").eq("ticket_code", code.toUpperCase()).maybeSingle();
+    if (e) return fail("Ticket lookup", e);
+    setTicketResult(row || "none");
+  };
+  const boardTicket = async () => {
+    if (!ticketResult || ticketResult === "none") return;
+    const { error: e } = await sb.from("tickets").update({ status: "used" }).eq("id", ticketResult.id);
+    if (e) return fail("Could not mark ticket used", e);
+    setTicketResult({ ...ticketResult, status: "used" });
+    ok("Ticket marked as used");
+    load();
+  };
+  const saveProfile = async () => {
+    await run("Save profile", sb.from("bus_companies").update(profileForm).eq("id", cid), "Profile saved");
+  };
+
+  // helpers
+  const routeName = (id) => { const r = data.routes.find((x) => x.id === id); return r ? `${r.origin_city || ""} → ${r.destination_city || ""}` : "—"; };
+  const busName = (id) => { const b = data.buses.find((x) => x.id === id); return b ? b.registration_number : "—"; };
+  const field = (label, value, onChange, props) => h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#666", gap: 4, flex: "1 1 160px" } }, label,
+    h("input", { style: dtInput, value, onChange: (e) => onChange(e.target.value), ...(props || {}) }));
+  const empty = (text) => h("p", { style: { fontSize: 13, color: "#888", padding: "12px 0" } }, text);
+  const card = (title, ...children) => h("div", { style: dtCard }, h("h3", { style: { fontWeight: 600, fontSize: 14, marginBottom: 12 } }, title), ...children);
+  const row = (key, ...cells) => h("div", { key, style: dtRowStyle }, ...cells);
+
+  const paid = data.payments.filter((p) => p.status === "successful");
+  const confirmed = data.bookings.filter((b) => b.status === "confirmed");
+  const upcoming = data.schedules.filter((s) => s.status === "scheduled" && new Date(s.departure_datetime) > new Date());
+
+  let body = null;
+  if (!cid) body = empty("No company is signed in.");
+  else if (loading) body = empty("Loading your live data…");
+  else if (tab === "overview") {
+    const totalSeats = upcoming.length ? upcoming.reduce((n, s) => n + (data.buses.find((b) => b.id === s.bus_id)?.capacity || 0), 0) : 0;
+    const freeSeats = upcoming.reduce((n, s) => n + (s.available_seats || 0), 0);
+    const stats = [
+      ["Confirmed bookings", confirmed.length],
+      ["Revenue (base)", dtMoney(paid.reduce((n, p) => n + (p.base_amount || 0), 0))],
+      ["Upcoming schedules", upcoming.length],
+      ["Seats occupied", totalSeats ? Math.round(((totalSeats - freeSeats) / totalSeats) * 100) + "%" : "—"],
+    ];
+    body = h("div", null,
+      h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 } },
+        stats.map(([l, v]) => h("div", { key: l, style: { ...dtCard, marginBottom: 0 } }, h("p", { style: { fontSize: 11, color: "#888", textTransform: "uppercase" } }, l), h("p", { style: { fontWeight: 700, fontSize: 20, marginTop: 4 } }, v)))),
+      !data.buses.length || !data.routes.length || !upcoming.length
+        ? card("Get started", h("p", { style: { fontSize: 13, lineHeight: 1.6 } },
+            `1. Add a bus (${data.buses.length} so far)  2. Add a route (${data.routes.length})  3. Publish a schedule (${upcoming.length}). Customers see your trips as soon as a schedule is published.`))
+        : null,
+      card("Recent bookings", data.bookings.length ? data.bookings.slice(0, 6).map((b) => row(b.id, h("span", null, `${b.booking_reference || b.id.slice(0, 8)} • seats ${dtSeatList(b.seat_numbers)}`), h("span", null, `${dtMoney(b.total_amount)} • ${b.status}`))) : empty("No bookings yet.")));
+  } else if (tab === "buses") {
+    body = h("div", null,
+      card("Add a bus", h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+        field("Registration number", busForm.registration_number, (v) => setBusForm({ ...busForm, registration_number: v }), { placeholder: "UAA 123B" }),
+        field("Bus type", busForm.bus_type, (v) => setBusForm({ ...busForm, bus_type: v })),
+        field("Seats", busForm.capacity, (v) => setBusForm({ ...busForm, capacity: v }), { type: "number", min: 1, max: 80 }),
+        field("Staff/blocked seats (e.g. 1,2)", busForm.staff_seats, (v) => setBusForm({ ...busForm, staff_seats: v })),
+        h("button", { style: dtBtn(), onClick: addBus }, "Add bus"))),
+      card(`Your buses (${data.buses.length})`, data.buses.length ? data.buses.map((b) => row(b.id,
+        h("span", null, `${b.registration_number} • ${b.bus_type || ""} • ${b.capacity} seats`),
+        h("button", { style: dtBtn("#FFEBEE", "#C62828"), onClick: () => { if (confirm("Delete this bus?")) run("Delete bus", sb.from("buses").delete().eq("id", b.id), "Bus deleted"); } }, "Delete"))) : empty("No buses yet.")));
+  } else if (tab === "routes") {
+    body = h("div", null,
+      card("Add a route", h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+        field("From (city)", routeForm.origin_city, (v) => setRouteForm({ ...routeForm, origin_city: v }), { placeholder: "Kampala" }),
+        field("To (city)", routeForm.destination_city, (v) => setRouteForm({ ...routeForm, destination_city: v }), { placeholder: "Mbarara" }),
+        field("Origin terminal", routeForm.origin_terminal, (v) => setRouteForm({ ...routeForm, origin_terminal: v })),
+        field("Destination terminal", routeForm.destination_terminal, (v) => setRouteForm({ ...routeForm, destination_terminal: v })),
+        field("Distance (km)", routeForm.distance_km, (v) => setRouteForm({ ...routeForm, distance_km: v }), { type: "number" }),
+        field("Standard fare (UGX)", routeForm.base_price, (v) => setRouteForm({ ...routeForm, base_price: v }), { type: "number" }),
+        h("button", { style: dtBtn(), onClick: addRoute }, "Add route"))),
+      card(`Your routes (${data.routes.length})`, data.routes.length ? data.routes.map((r) => row(r.id,
+        h("span", null, `${r.origin_city} → ${r.destination_city} • ${r.base_price ? dtMoney(r.base_price) : "no fare set"} • ${r.status}`),
+        h("span", { style: { display: "flex", gap: 8 } },
+          h("button", { style: dtBtn("#E8F4FF", "#0798E3"), onClick: () => run("Update route", sb.from("routes").update({ status: r.status === "active" ? "inactive" : "active" }).eq("id", r.id)) }, r.status === "active" ? "Deactivate" : "Activate"),
+          h("button", { style: dtBtn("#FFEBEE", "#C62828"), onClick: () => { if (confirm("Delete this route?")) run("Delete route", sb.from("routes").delete().eq("id", r.id), "Route deleted"); } }, "Delete")))) : empty("No routes yet.")));
+  } else if (tab === "schedules" || tab === "seats") {
+    body = h("div", null,
+      card("Publish a schedule", data.buses.length && data.routes.length ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#666", gap: 4, flex: "1 1 160px" } }, "Bus",
+          h("select", { style: dtInput, value: schedForm.bus_id, onChange: (e) => setSchedForm({ ...schedForm, bus_id: e.target.value }) }, h("option", { value: "" }, "Choose…"), data.buses.map((b) => h("option", { key: b.id, value: b.id }, `${b.registration_number} (${b.capacity})`)))),
+        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#666", gap: 4, flex: "1 1 160px" } }, "Route",
+          h("select", { style: dtInput, value: schedForm.route_id, onChange: (e) => { const r = data.routes.find((x) => x.id === e.target.value); setSchedForm({ ...schedForm, route_id: e.target.value, base_fare: r && r.base_price ? String(r.base_price) : schedForm.base_fare }); } }, h("option", { value: "" }, "Choose…"), data.routes.filter((r) => r.status === "active").map((r) => h("option", { key: r.id, value: r.id }, `${r.origin_city} → ${r.destination_city}`)))),
+        field("Departure", schedForm.departure, (v) => setSchedForm({ ...schedForm, departure: v }), { type: "datetime-local" }),
+        field("Arrival", schedForm.arrival, (v) => setSchedForm({ ...schedForm, arrival: v }), { type: "datetime-local" }),
+        field("Fare per seat (UGX)", schedForm.base_fare, (v) => setSchedForm({ ...schedForm, base_fare: v }), { type: "number" }),
+        h("button", { style: dtBtn(), onClick: addSchedule }, "Publish"))
+        : empty("Add at least one bus and one route first.")),
+      card(`Your schedules (${data.schedules.length})`, data.schedules.length ? data.schedules.map((s) => h("div", { key: s.id },
+        row(s.id + "r",
+          h("span", null, `${routeName(s.route_id)} • ${busName(s.bus_id)} • ${dtFmt(s.departure_datetime)} • ${dtMoney(s.base_fare)} • ${s.available_seats ?? "?"} seats free • ${s.status}`),
+          h("span", { style: { display: "flex", gap: 8 } },
+            h("button", { style: dtBtn("#E8F4FF", "#0798E3"), onClick: () => (openSchedule === s.id ? setOpenSchedule(null) : loadSeats(s.id)) }, openSchedule === s.id ? "Hide seats" : "Seats"),
+            h("button", { style: dtBtn("#FFF3E0", "#E65100"), onClick: () => run("Update schedule", sb.from("schedules").update({ status: s.status === "scheduled" ? "cancelled" : "scheduled" }).eq("id", s.id)) }, s.status === "scheduled" ? "Cancel trip" : "Reopen"))),
+        openSchedule === s.id ? h("div", { style: { padding: "10px 0 16px" } },
+          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, seats.map((seat) => h("button", {
+            key: seat.id, onClick: () => toggleSeat(seat), title: seat.status,
+            style: { width: 40, height: 36, borderRadius: 8, border: "1px solid #CCC", fontSize: 12, cursor: seat.status === "held" || seat.status === "booked" ? "not-allowed" : "pointer",
+              background: seat.status === "booked" ? "#C8E6C9" : seat.status === "held" ? "#FFE082" : seat.status === "blocked" ? "#BDBDBD" : "#fff" },
+          }, seat.seat_number))),
+          h("p", { style: { fontSize: 11, color: "#888", marginTop: 8 } }, "White = free, grey = blocked (tap to toggle), yellow = payment pending, green = booked.")) : null)) : empty("No schedules yet.")));
+  } else if (tab === "bookings") {
+    body = h("div", null,
+      card("Verify a ticket at boarding", h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } },
+        h("input", { style: dtInput, placeholder: "Ticket code e.g. TKT-1A2B3C4D5E", value: ticketCode, onChange: (e) => setTicketCode(e.target.value) }),
+        h("button", { style: dtBtn(), onClick: verifyTicket }, "Check")),
+        ticketResult === "none" ? h("p", { style: { color: "#C62828", fontSize: 13, marginTop: 10 } }, "No ticket found with that code for your company.")
+          : ticketResult ? h("p", { style: { fontSize: 13, marginTop: 10 } }, `Seat ${ticketResult.seat_number} • ${ticketResult.passenger_name || "passenger"} • ${ticketResult.status}`,
+              ticketResult.status === "valid" ? h("button", { style: { ...dtBtn("#2E7D32"), marginLeft: 10 }, onClick: boardTicket }, "Mark as boarded") : null) : null),
+      card(`Bookings (${data.bookings.length})`, data.bookings.length ? data.bookings.map((b) => {
+        const t = data.tickets.filter((x) => x.booking_id === b.id);
+        return row(b.id, h("span", null, `${b.booking_reference || b.id.slice(0, 8)} • seats ${dtSeatList(b.seat_numbers)} • ${t.map((x) => x.ticket_code).join(", ") || "no tickets yet"}`),
+          h("span", null, `${dtMoney(b.total_amount)} • ${b.status} • ${dtFmt(b.created_at)}`));
+      }) : empty("No bookings yet.")));
+  } else if (tab === "payments") {
+    body = card(`Payments (${data.payments.length})`, data.payments.length ? data.payments.map((p) => row(p.id,
+      h("span", null, `${p.payment_method === "airtel_money" ? "Airtel Money" : "MTN MoMo"} • ${p.provider_reference || p.id.slice(0, 8)}`),
+      h("span", null, `${dtMoney(p.amount)} (you: ${dtMoney(p.base_amount)}) • ${p.status} • settlement ${p.settlement_status || "pending"}`))) : empty("No payments yet."));
+  } else if (tab === "earnings") {
+    const sum = (arr, k) => arr.reduce((n, p) => n + (p[k] || 0), 0);
+    const mtn = paid.filter((p) => p.payment_method !== "airtel_money");
+    const airtel = paid.filter((p) => p.payment_method === "airtel_money");
+    body = h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 } },
+      [["Gross collected", dtMoney(sum(paid, "amount"))], ["Your earnings", dtMoney(sum(paid, "base_amount"))], ["Platform fee", dtMoney(sum(paid, "admin_amount"))],
+        ["MTN MoMo", `${mtn.length} • ${dtMoney(sum(mtn, "base_amount"))}`], ["Airtel Money", `${airtel.length} • ${dtMoney(sum(airtel, "base_amount"))}`],
+        ["Pending settlement", dtMoney(sum(paid.filter((p) => (p.settlement_status || "pending") === "pending"), "base_amount"))]]
+        .map(([l, v]) => h("div", { key: l, style: { ...dtCard, marginBottom: 0 } }, h("p", { style: { fontSize: 11, color: "#888", textTransform: "uppercase" } }, l), h("p", { style: { fontWeight: 700, fontSize: 18, marginTop: 4 } }, v))));
+  } else if (tab === "notifications") {
+    body = card(`Notifications (${data.notifications.length})`, data.notifications.length ? data.notifications.map((n) => row(n.id,
+      h("span", { style: { fontWeight: n.is_read ? 400 : 700 } }, `${n.title || "Notice"} — ${n.message || ""}`),
+      n.is_read ? h("span", { style: { color: "#888" } }, dtFmt(n.created_at)) : h("button", { style: dtBtn("#E8F4FF", "#0798E3"), onClick: () => run("Mark read", sb.from("notifications").update({ is_read: true }).eq("id", n.id), "Marked as read") }, "Mark read"))) : empty("No notifications."));
+  } else if (tab === "profile" && profileForm) {
+    const keys = [["phone", "Phone"], ["address", "Address"], ["operating_location", "Operating location"], ["description", "Description"], ["rep_name", "Representative name"], ["rep_phone", "Representative phone"], ["rep_email", "Representative email"], ["logo_url", "Logo URL"], ["merchant_mtn_code", "MTN MoMo merchant code"], ["merchant_airtel_code", "Airtel Money merchant code"]];
+    body = card(`${company.company_name} — ${company.approval_status || "pending"}`,
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10 } }, keys.map(([k, l]) => h("div", { key: k, style: { flex: "1 1 220px", display: "flex" } }, field(l, profileForm[k], (v) => setProfileForm({ ...profileForm, [k]: v }))))),
+      h("button", { style: { ...dtBtn(), marginTop: 14 }, onClick: saveProfile }, "Save profile"));
+  }
+
+  return h("div", { style: { maxWidth: 1000, margin: "0 auto" } },
+    h("h2", { style: { fontWeight: 700, fontSize: 18, marginBottom: 14, textTransform: "capitalize" } }, tab === "seats" ? "Seat management" : tab),
+    error ? h("div", { role: "alert", style: { background: "#FFEBEE", color: "#B71C1C", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 } }, error) : null,
+    notice ? h("div", { style: { background: "#E8F5E9", color: "#1B5E20", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 } }, notice) : null,
+    body);
+}
+// ---- end company dashboard modules ----
+
 var fo = ({ children: A, width: e }) =>
     c("div", {
       className:
@@ -11992,15 +12169,21 @@ function co() {
     let active = true;
     const loadLiveCatalog = async () => {
       try {
-        const [{ data: companies }, { data: routes }, { data: schedules }, { data: seats }] =
-          await Promise.all([
+        const results = await Promise.all([
             dailyTravelSupabase.from("bus_companies").select("*"),
             dailyTravelSupabase.from("routes").select("*"),
-            dailyTravelSupabase.from("schedules").select("*"),
+            dailyTravelSupabase.from("schedules").select("*").gte("departure_datetime", new Date().toISOString()).order("departure_datetime"),
             dailyTravelSupabase.from("schedule_seats").select("*"),
           ]);
         if (!active) return;
-        if (companies?.length) {
+        const failed = results.find((r) => r.error);
+        if (failed) {
+          dailyTravelNotify("Could not load live trips: " + failed.error.message + " (showing demo data)");
+          return;
+        }
+        const [{ data: companies }, { data: routes }, { data: schedules }, { data: seats }] = results;
+        window.dailyTravelLive = true;
+        if (companies) {
           Wc(
             companies.map((company) => ({
               ...company,
@@ -12013,7 +12196,7 @@ function co() {
             })),
           );
         }
-        if (schedules?.length) {
+        if (schedules) {
           const routeMap = Object.fromEntries(
             (routes || []).map((route) => [route.id, route]),
           );
@@ -12064,16 +12247,29 @@ function co() {
           so(mappedSchedules);
         }
       } catch (error) {
-        console.warn("Live catalog load failed; keeping the current catalog", error);
+        dailyTravelNotify("Live catalog load failed: " + (error?.message || error));
       }
     };
     loadLiveCatalog();
+    let timer = null;
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(loadLiveCatalog, 500);
+    };
+    const catalogChannel = dailyTravelSupabase
+      .channel("catalog-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "routes" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "bus_companies" }, refresh)
+      .subscribe();
     return () => {
       active = false;
+      clearTimeout(timer);
+      dailyTravelSupabase.removeChannel(catalogChannel);
     };
   }, []);
   M.useEffect(() => {
-    if (!r || r.company_name || !dailyTravelIsUuid(r.id)) return;
+    if (!r || !dailyTravelIsUuid(r.id)) return;
     let active = true;
     const loadCustomerRecords = async () => {
       const [{ data: bookings }, { data: payments }, { data: tickets }] =
@@ -12127,7 +12323,7 @@ function co() {
     };
   }, [r]);
   M.useEffect(() => {
-    if (!r || r.company_name || !dailyTravelIsUuid(r.id)) return undefined;
+    if (!r || !dailyTravelIsUuid(r.id)) return undefined;
     let active = true;
     const refreshCustomerRecords = async () => {
       const [{ data: bookings }, { data: payments }, { data: tickets }] =
@@ -12188,60 +12384,6 @@ function co() {
       dailyTravelSupabase.removeChannel(channel);
     };
   }, [r]);
-  // Company dashboard: real bookings / payments / tickets for the APPROVED company.
-  // Mirrors the customer live loader, but filters by company_id (not customer_id).
-  // Runs only for a real Supabase company row (UUID id + company_name); demo
-  // companies (c1, c2, ...) keep their bundled demo data.
-  M.useEffect(() => {
-    if (!r || !r.company_name || !dailyTravelIsUuid(r.id)) return undefined;
-    let active = true;
-    const loadCompanyRecords = async () => {
-      try {
-        const [{ data: bookings }, { data: payments }, { data: tickets }] =
-          await Promise.all([
-            dailyTravelSupabase.from("bookings").select("*").eq("company_id", r.id).order("created_at", { ascending: false }),
-            dailyTravelSupabase.from("payments").select("*").eq("company_id", r.id).order("created_at", { ascending: false }),
-            dailyTravelSupabase.from("tickets").select("*").order("created_at", { ascending: false }),
-          ]);
-        if (!active) return;
-        if (bookings) {
-          const ticketMap = Object.fromEntries((tickets || []).map((ticket) => [ticket.booking_id, ticket]));
-          xc(bookings.map((booking) => ({
-            ...booking,
-            ticket_code: ticketMap[booking.id]?.ticket_code || booking.booking_reference || "",
-            seat_numbers: Array.isArray(booking.seat_numbers) ? booking.seat_numbers : [],
-            payment_method: booking.payment_method || "mtn_momo",
-            base_fare: Number(booking.base_fare) || 0,
-            admin_charge: Number(booking.admin_charge) || 0,
-            total_amount: Number(booking.total_amount) || 0,
-          })));
-        }
-        if (payments) {
-          wc(payments.map((payment) => ({
-            ...payment,
-            method: payment.payment_method || "mtn_momo",
-            status: payment.status || payment.provider_status || "pending",
-            amount: Number(payment.amount) || 0,
-            base_fare: Number(payment.base_amount) || 0,
-            admin_charge: Number(payment.admin_amount) || 0,
-            // Fields the Payments screen already renders:
-            company_code: r.mtn_momo_code || r.merchant_mtn_code || "",
-            admin_code: r.airtel_money_code || r.merchant_airtel_code || "",
-            booking_id: payment.booking_id || "",
-          })));
-        }
-      } catch (error) { console.warn("Company records load failed", error); }
-    };
-    loadCompanyRecords();
-    const channel = dailyTravelSupabase
-      .channel(`company-live-${r.id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "bookings", filter: `company_id=eq.${r.id}` }, loadCompanyRecords)
-      .on("postgres_changes", { event: "*", schema: "public", table: "payments", filter: `company_id=eq.${r.id}` }, loadCompanyRecords)
-      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, loadCompanyRecords)
-      .on("postgres_changes", { event: "*", schema: "public", table: "schedules", filter: `company_id=eq.${r.id}` }, () => { window.location.reload(); })
-      .subscribe();
-    return () => { active = false; dailyTravelSupabase.removeChannel(channel); };
-  }, [r]);
   M.useEffect(() => {
     if (!k || !dailyTravelIsUuid(k.id)) return undefined;
     const applySeatChange = (payload) => {
@@ -12298,7 +12440,8 @@ function co() {
             email: N,
             password: U,
           });
-        if (!authError && authData?.user) {
+        if (authError) return alert(authError.message);
+        if (authData?.user) {
           if (t === "customer") {
             const { data: profile } = await dailyTravelSupabase
               .from("users")
@@ -12336,25 +12479,12 @@ function co() {
           }
         }
       } catch (error) {
-        console.warn("Supabase sign-in unavailable; checking prototype data", error);
+        return alert("Sign-in failed: " + (error?.message || error));
       }
-      if (t === "customer") {
-        let o = zo.find(
-          (h) => (h.email === N || h.phone === N) && h.password === U,
-        );
-        if (!o) return alert("Invalid credentials or not approved");
-        (l(o), e("dashboard"), i("search"));
-      } else if (t === "company") {
-        let o = Se.find((h) => h.email === N && h.password === U);
-        if (!o) return alert("Invalid company credentials");
-        if (o.approval_status !== "approved")
-          return alert("Company awaiting admin approval");
-        (l(o), e("dashboard"), p("overview"));
-      } else {
-        let o = Se.find((h) => h.email === N);
-        if (!o) return alert("Branch not found");
-        (l(o), e("dashboard"), p("overview"));
-      }
+      if (t === "company")
+        return alert("No company account is linked to this login. Register your company first, or sign in with the email you registered with.");
+      if (t === "customer") return alert("Invalid email or password");
+      return alert("Branch sign-in is not available yet. Use your company login.");
     },
     Ec = async () => {
       if (!d.fullName || !d.phone || !d.email || !d.password)
@@ -12364,35 +12494,15 @@ function co() {
         await dailyTravelSupabase.auth.signUp({
           email: d.email,
           password: d.password,
-          options: { data: { full_name: d.fullName, phone: d.phone } },
+          options: { data: { full_name: d.fullName, phone: d.phone, role: "customer" } },
         });
       if (authError) return alert(authError.message);
-      let o = {
-        id: authData?.user?.id || "u" + Date.now(),
-        full_name: d.fullName,
-        phone: d.phone,
-        email: d.email,
-        password: d.password,
-        role: "customer",
-        status: "active",
-        avatar: d.avatar,
-      };
-      Rc([...zo, o]);
-      try {
-        await en.current?.from("users")?.insert?.({
-          id: authData?.user?.id,
-          full_name: d.fullName,
-          phone: d.phone,
-          email: d.email,
-          password_hash: d.password,
-          role: "customer",
-          status: "active",
-          profile_picture_url: d.avatar || null,
-        });
-      } catch (error) {
-        console.warn("User profile save failed", error);
-      }
-      (alert("Account created successfully"), e("login"), n("customer"));
+      alert(
+        authData?.session
+          ? "Account created successfully"
+          : "Account created. Check your email to confirm your address, then sign in.",
+      );
+      (e("login"), n("customer"));
     },
     Fc = async () => {
       if (
@@ -12410,52 +12520,30 @@ function co() {
           email: m.email,
           password: m.password,
           options: {
-            data: { company_name: m.companyName, role: "company" },
+            data: {
+              role: "company",
+              company_name: m.companyName,
+              trading_name: m.tradingName || m.companyName,
+              registration_number: m.regNo || "",
+              description: m.desc || "",
+              phone: m.phone || "",
+              address: m.address || "",
+              operating_location: m.location || "",
+              rep_name: m.repName || "",
+              rep_phone: m.repPhone || "",
+              rep_email: m.repEmail || "",
+              merchant_mtn_code: m.mtnCode,
+              merchant_airtel_code: m.airtelCode,
+            },
           },
         });
       if (authError) return alert(authError.message);
-      let o = {
-        id: authData?.user?.id || "c" + Date.now(),
-        company_name: m.companyName,
-        trading_name: m.tradingName || m.companyName,
-        email: m.email,
-        password: m.password,
-        phone: m.phone,
-        logo: m.logo,
-        rating: 4.5,
-        bus_type: "Standard",
-        approval_status: "pending",
-        mtn_momo_code: m.mtnCode,
-        airtel_money_code: m.airtelCode,
-        address: m.address,
-        location: m.location,
-      };
-      Wc([...Se, o]);
-      try {
-        await en.current?.from("bus_companies")?.insert?.({
-          owner_id: authData?.user?.id,
-          company_name: m.companyName,
-          trading_name: m.tradingName || m.companyName,
-          registration_number: m.regNo || null,
-          description: m.desc || null,
-          phone: m.phone || null,
-          email: m.email,
-          address: m.address || null,
-          operating_location: m.location || null,
-          rep_name: m.repName || null,
-          rep_phone: m.repPhone || null,
-          rep_email: m.repEmail || null,
-          logo_url: m.logo || null,
-          photos: m.photos || [],
-          merchant_mtn_code: m.mtnCode,
-          merchant_airtel_code: m.airtelCode,
-          status: "pending",
-          approval_status: "pending",
-        });
-      } catch (error) {
-        console.warn("Company profile save failed", error);
-      }
-      (alert("Company registered - awaiting admin approval"), e("welcome"));
+      (alert(
+        authData?.session
+          ? "Company registered - awaiting admin approval"
+          : "Company registered. Confirm your email, then wait for admin approval before signing in.",
+      ),
+        e("welcome"));
     },
     Uc = (o) => {
       (Pc(o), An([]), or(!0));
@@ -14501,6 +14589,9 @@ function co() {
                 })
               : c(se, {
                   children: [
+                    ["overview", "profile", "buses", "routes", "schedules", "seats", "bookings", "payments", "earnings", "notifications"].includes(a) &&
+                      f(CompanyOps, { company: r, tab: a }),
+                    false &&
                     a === "overview" &&
                       c("div", {
                         className: "max-w-[1100px] mx-auto",
@@ -14517,24 +14608,24 @@ function co() {
                                 label: "Total Bookings",
                                 value:
                                   RA.filter((o) => o.company_id === r.id)
-                                    .length,
+                                    .length || "24",
                                 sub: "+12% this week",
                               },
                               {
                                 label: "Revenue",
-                                value: `UGX ${(RA.reduce((o, h) => o + h.total_amount, 0)).toLocaleString()}`,
+                                value: `UGX ${(RA.reduce((o, h) => o + h.total_amount, 0) || 1250000).toLocaleString()}`,
                                 sub: "Base after 2% fee",
                               },
                               {
                                 label: "Active Schedules",
                                 value:
                                   dr.filter((o) => o.company_id === r.id)
-                                    .length,
+                                    .length || "8",
                                 sub: "Today",
                               },
                               {
                                 label: "Seats Occupancy",
-                                value: (() => { const sc = dr.filter((o) => o.company_id === r.id); const booked = sc.reduce((s, o) => s + (o.booked_seats?.length || 0), 0); const total = sc.reduce((s, o) => s + (o.seats_total || 0), 0); return total ? Math.round((booked / total) * 100) + "%" : "0%"; })(),
+                                value: "78%",
                                 sub: "Avg today",
                               },
                             ].map((o, h) =>
@@ -14607,6 +14698,7 @@ function co() {
                           }),
                         ],
                       }),
+                    false &&
                     a === "seats" &&
                       c("div", {
                         className: "max-w-[800px] mx-auto",
@@ -14618,7 +14710,8 @@ function co() {
                           f("div", {
                             className: "flex flex-col gap-4",
                             children: dr
-                              .filter((o) => o.company_id === r.id)
+                              .filter((o) => o.company_id === r.id || !0)
+                              .slice(0, 3)
                               .map((o) =>
                                 c(
                                   "div",
@@ -14681,7 +14774,6 @@ function co() {
                                                         : $,
                                                     ),
                                                   );
-                                                  (async () => { try { await dailyTravelSupabase.from("schedule_seats").upsert({ schedule_id: o.id, seat_number: Z, status: HA ? "available" : "blocked" }, { onConflict: "schedule_id,seat_number" }); } catch (err) { console.warn("Seat block save failed", err); } })();
                                                 },
                                                 className: `h-9 rounded-[8px] text-[11px] font-semibold border ${HA ? "bg-[#202124] text-white border-[#202124]" : "bg-white border-[#E0E0E0]"}`,
                                                 children: Z,
@@ -14695,7 +14787,7 @@ function co() {
                                         className:
                                           "text-[11px] text-[#888] mt-3",
                                         children:
-                                          "Tap a seat to block / unblock it • Saved to Supabase (schedule_seats)",
+                                          "Tap to toggle offline block • Updates instantly via schedule_seats",
                                       }),
                                     ],
                                   },
@@ -14705,14 +14797,7 @@ function co() {
                           }),
                         ],
                       }),
-                    (a === "profile" ||
-                      a === "buses" ||
-                      a === "routes" ||
-                      a === "schedules" ||
-                      a === "bookings" ||
-                      a === "payments" ||
-                      a === "earnings" ||
-                      a === "notifications") &&
+                    false &&
                       c("div", {
                         className: "max-w-[960px] mx-auto",
                         children: [
@@ -14768,7 +14853,7 @@ function co() {
                                                   RA.reduce(
                                                     (o, h) => o + h.base_fare,
                                                     0,
-                                                  )
+                                                  ) || 980000
                                                 ).toLocaleString(),
                                               ],
                                             }),
@@ -14792,7 +14877,7 @@ function co() {
                                                     (o, h) =>
                                                       o + h.admin_charge,
                                                     0,
-                                                  )
+                                                  ) || 20000
                                                 ).toLocaleString(),
                                               ],
                                             }),
@@ -14879,48 +14964,6 @@ function co() {
                                       o.id,
                                     ),
                                   ),
-                                }),
-
-                              a === "profile" &&
-                                f("div", {
-                                  className: "text-left mt-6",
-                                  children: [
-                                    ["Company", r.company_name || ""],["Trading name", r.trading_name || ""],["Email", r.email || ""],["Phone", r.phone || ""],["Location", r.operating_location || r.location || ""],["Address", r.address || ""],["Representative", r.rep_name || ""],["Rep phone", r.rep_phone || ""],["MTN MoMo code", r.mtn_momo_code || r.merchant_mtn_code || ""],["Airtel Money code", r.airtel_money_code || r.merchant_airtel_code || ""],["Approval status", r.approval_status || "approved"],["Company ID", r.id || ""],
-                                  ].map((row) =>
-                                    c("div", { className: "flex justify-between py-2 border-b border-[#F0F0F0] text-[12px]", children: [c("span", { className: "text-[#888]", children: row[0] }), c("span", { className: "font-semibold text-right", children: String(row[1]) })] }, row[0]),
-                                  ),
-                                }),
-                              a === "buses" &&
-                                f("div", {
-                                  className: "text-left mt-4",
-                                  children: (() => { const seen = {}; dr.filter((o) => o.company_id === r.id).forEach((o) => { seen[o.bus_reg || "—"] = seen[o.bus_reg || "—"] || { reg: o.bus_reg || "—", layout: o.layout || "", total: o.seats_total || 0, trips: 0 }; seen[o.bus_reg || "—"].trips += 1; }); const buses = Object.values(seen); return buses.length ? buses.map((o) => c("div", { className: "flex justify-between py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("span", { children: [o.reg, " • ", o.layout] }), c("span", { children: [o.total, " seats • ", o.trips, " schedule(s)"] })] }, o.reg)) : [f("p", { className: "text-[13px] text-[#888]", children: "No buses yet — buses appear here once you have schedules in Supabase." })]; })(),
-                                }),
-                              a === "routes" &&
-                                f("div", {
-                                  className: "text-left mt-4",
-                                  children: (() => { const seen = {}; dr.filter((o) => o.company_id === r.id).forEach((o) => { const key = (o.origin || "") + " → " + (o.destination || ""); seen[key] = seen[key] || { route: key, trips: 0, fare: o.fare || 0 }; seen[key].trips += 1; if (o.fare) seen[key].fare = Math.min(seen[key].fare || o.fare, o.fare); }); const routes = Object.values(seen); return routes.length ? routes.map((o) => c("div", { className: "flex justify-between py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("span", { children: o.route }), c("span", { children: ["UGX ", Number(o.fare || 0).toLocaleString(), " • ", o.trips, " schedule(s)"] })] }, o.route)) : [f("p", { className: "text-[13px] text-[#888]", children: "No routes yet — routes appear here once you have schedules in Supabase." })]; })(),
-                                }),
-                              a === "schedules" &&
-                                f("div", {
-                                  className: "text-left mt-4",
-                                  children: (() => { const list = dr.filter((o) => o.company_id === r.id); return list.length ? list.map((o) => c("div", { className: "flex justify-between py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("span", { children: [o.origin, " → ", o.destination, " • ", o.date, " ", o.departure_time, " • ", o.bus_reg] }), c("span", { children: ["UGX ", Number(o.fare || 0).toLocaleString(), " • ", (o.seats_total || 0) - (o.booked_seats?.length || 0), "/", (o.seats_total || 0), " seats left"] })] }, o.id)) : [f("p", { className: "text-[13px] text-[#888]", children: "No schedules yet." })]; })(),
-                                }),
-                              a === "earnings" &&
-                                f("div", {
-                                  className: "text-left mt-6",
-                                  children: [
-                                    c("div", { className: "grid grid-cols-3 gap-3 mb-4", children: [
-                                      c("div", { className: "bg-[#F5F7F8] rounded-[12px] p-4", children: [f("p", { className: "text-[11px] text-[#888]", children: "Total collected" }), c("p", { className: "font-bold", children: ["UGX ", fr.reduce((s, o) => s + (Number(o.amount) || 0), 0).toLocaleString()] })] }),
-                                      c("div", { className: "bg-[#FFF3E0] rounded-[12px] p-4", children: [f("p", { className: "text-[11px] text-[#888]", children: "Platform 2%" }), c("p", { className: "font-bold", children: ["UGX ", fr.reduce((s, o) => s + (Number(o.admin_amount ?? o.admin_charge) || 0), 0).toLocaleString()] })] }),
-                                      c("div", { className: "bg-[#E8F5E9] rounded-[12px] p-4", children: [f("p", { className: "text-[11px] text-[#888]", children: "Net to company" }), c("p", { className: "font-bold", children: ["UGX ", (fr.reduce((s, o) => s + (Number(o.amount) || 0), 0) - fr.reduce((s, o) => s + (Number(o.admin_amount ?? o.admin_charge) || 0), 0)).toLocaleString()] })] }),
-                                    ] }),
-                                    fr.length ? fr.map((o) => c("div", { className: "flex justify-between py-2 border-b border-[#F0F0F0] text-[12px]", children: [c("span", { children: [o.booking_id, " • ", o.method, " • ", o.status] }), c("span", { children: ["UGX ", Number(o.amount || 0).toLocaleString()] })] }, o.id)) : f("p", { className: "text-[13px] text-[#888]", children: "No earnings yet — earnings appear here as customers pay." }),
-                                  ],
-                                }),
-                              a === "notifications" &&
-                                f("div", {
-                                  className: "text-left mt-4",
-                                  children: (() => { const items = [...RA.map((o) => ({ id: "b-" + o.id, when: o.created_at || "", text: "New booking " + (o.ticket_code || o.booking_reference || "") + " • Seats " + (o.seat_numbers || []).join(",") + " • UGX " + Number(o.total_amount || 0).toLocaleString() })), ...fr.map((o) => ({ id: "p-" + o.id, when: o.created_at || "", text: "Payment " + (o.status || "") + " • UGX " + Number(o.amount || 0).toLocaleString() + " • " + (o.method || "") }))].sort((x, y) => String(y.when).localeCompare(String(x.when))).slice(0, 10); return items.length ? items.map((o) => c("div", { className: "py-3 border-b border-[#F0F0F0] text-[13px]", children: [c("p", { children: o.text }), f("p", { className: "text-[11px] text-[#888]", children: o.when ? new Date(o.when).toLocaleString() : "" })] }, o.id)) : [f("p", { className: "text-[13px] text-[#888]", children: "No notifications yet." })]; })(),
                                 }),
                             ],
                           }),

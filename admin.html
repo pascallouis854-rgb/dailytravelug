@@ -1847,136 +1847,38 @@ const dailyTravelHash = async (value) => {
   ).join("");
 };
 
-// Compatibility adapter for the existing bundle. It translates prototype field
-// names to the live schema and creates the related payment/ticket records.
-const dailyTravelSupabaseBridge = {
-  auth: dailyTravelSupabase.auth,
-  channel: (...args) => dailyTravelSupabase.channel(...args),
-  from(table) {
-    const builder = dailyTravelSupabase.from(table);
-    const originalInsert = builder.insert.bind(builder);
-    builder.insert = (values, options) => {
-      const rows = dailyTravelAsRows(values);
-      if (table === "users") {
-        return Promise.resolve()
-          .then(async () => {
-            const payload = await Promise.all(
-              rows.map(async (row) => {
-              const next = { ...row };
-              if (!dailyTravelIsUuid(next.id)) delete next.id;
-              delete next.password;
-              delete next.avatar;
-              next.profile_picture_url = next.profile_picture_url || null;
-              next.password_hash = await dailyTravelHash(next.password_hash);
-              return next;
-              }),
-            );
-            return originalInsert(payload, options);
-          });
-      }
-      if (table === "bus_companies") {
-        const payload = rows.map((row) => {
-          const next = { ...row };
-          next.merchant_mtn_code = next.merchant_mtn_code || next.mtn_momo_code || null;
-          next.merchant_airtel_code =
-            next.merchant_airtel_code || next.airtel_money_code || null;
-          next.operating_location = next.operating_location || next.location || null;
-          next.logo_url = next.logo_url || next.logo || null;
-          next.registration_number =
-            next.registration_number || next.regNo || null;
-          next.description = next.description || next.desc || null;
-          delete next.mtn_momo_code;
-          delete next.airtel_money_code;
-          delete next.location;
-          delete next.logo;
-          delete next.password;
-          delete next.regNo;
-          delete next.desc;
-          return next;
-        });
-        return originalInsert(payload, options);
-      }
-      if (table === "audit_logs") {
-        const payload = rows.map((row) => {
-          const next = { ...row };
-          delete next.id;
-          next.reason = next.reason || next.details || null;
-          next.created_at = next.created_at || next.timestamp || undefined;
-          delete next.details;
-          delete next.timestamp;
-          return next;
-        });
-        return originalInsert(payload, options);
-      }
-      if (table === "bookings") {
-        const source = rows[0] || {};
-        const payload = {
-          customer_id: dailyTravelIsUuid(source.customer_id)
-            ? source.customer_id
-            : null,
-          company_id: dailyTravelIsUuid(source.company_id)
-            ? source.company_id
-            : null,
-          branch_id: dailyTravelIsUuid(source.branch_id) ? source.branch_id : null,
-          schedule_id: dailyTravelIsUuid(source.schedule_id)
-            ? source.schedule_id
-            : null,
-          route_id: dailyTravelIsUuid(source.route_id) ? source.route_id : null,
-          passenger_count:
-            Number(source.passenger_count) || source.seat_numbers?.length || 1,
-          seat_numbers: source.seat_numbers || [],
-          passenger_details: source.passenger_details || [],
-          base_fare: Number(source.base_fare) || Number(source.total_amount) || 0,
-          admin_charge: Number(source.admin_charge) || 0,
-          flutterwave_charge: Number(source.flutterwave_charge) || 0,
-          total_amount: Number(source.total_amount) || 0,
-          currency: source.currency || "UGX",
-          status: source.status || "confirmed",
-          payment_status: source.payment_status || "successful",
-        };
-        return originalInsert(payload, options)
-          .select("id,booking_reference")
-          .single()
-          .then(async ({ data, error }) => {
-            if (!error && data?.id) {
-              await dailyTravelSupabase.from("payments").insert({
-                booking_id: data.id,
-                company_id: payload.company_id,
-                customer_id: payload.customer_id,
-                amount: payload.total_amount,
-                base_amount: payload.base_fare,
-                admin_amount: payload.admin_charge,
-                flutterwave_amount: payload.flutterwave_charge,
-                currency: payload.currency,
-                payment_method: source.payment_method || "mtn_momo",
-                provider_reference: source.provider_reference || data.booking_reference,
-                provider_status: "successful",
-                status: "successful",
-                settlement_status: "pending",
-              });
-              const seats = Array.isArray(payload.seat_numbers)
-                ? payload.seat_numbers
-                : [];
-              if (seats.length) {
-                await dailyTravelSupabase.from("tickets").insert(
-                  seats.map((seat) => ({
-                    booking_id: data.id,
-                    passenger_name: source.passenger_name || null,
-                    seat_number: String(seat),
-                    status: "valid",
-                  })),
-                );
-              }
-            }
-            return { data, error };
-          });
-      }
-      return originalInsert(values, options);
-    };
-    return builder;
-  },
-};
+// Plain Supabase client. The browser never writes bookings, payments or tickets.
+const dailyTravelSupabaseBridge = dailyTravelSupabase;
 window.sb = dailyTravelSupabaseBridge;
+const dailyTravelNotify = (message) => {
+  try {
+    console.error("[Daily Travel Admin]", message);
+    let box = document.getElementById("dt-error-banner");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "dt-error-banner";
+      box.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#B71C1C;color:#fff;padding:10px 14px;border-radius:12px;font:13px system-ui;cursor:pointer";
+      box.title = "Tap to dismiss";
+      box.onclick = () => box.remove();
+      document.body.appendChild(box);
+    }
+    box.textContent = message;
+  } catch {}
+};
+// Surfaces failed or silently-blocked (0 rows, usually RLS) writes and reloads the real data.
+const dailyTravelCheck = (label, result) => {
+  const { data, error } = result || {};
+  if (error) {
+    dailyTravelNotify(label + " failed: " + error.message);
+  } else if (Array.isArray(data) && data.length === 0) {
+    dailyTravelNotify(label + " was not saved. This account may not be an active admin in public.users.");
+  } else {
+    return true;
+  }
+  if (window.dailyTravelReloadAdmin) window.dailyTravelReloadAdmin();
+  return false;
+};
+window.dailyTravelNotify = dailyTravelNotify;
 window.dailyTravelSupabaseConnection = dailyTravelSupabase
   .from("bus_companies")
   .select("id", { head: true, count: "exact" })
@@ -11458,11 +11360,12 @@ function qi() {
     [v, T] = L.useState(!1),
     [y, V] = L.useState(""),
     [q, N] = L.useState("Overview"),
-    [x, d] = L.useState(Wm),
-    [s, m] = L.useState(Lm),
-    [z, R] = L.useState(gm),
-    [X, w] = L.useState("0777001122"),
-    [W, D] = L.useState("0756002233"),
+    [x, d] = L.useState([]),
+    [s, m] = L.useState([]),
+    [z, R] = L.useState([]),
+    [dtCounts, setDtCounts] = L.useState({ customers: 0, bookings: 0 }),
+    [X, w] = L.useState(""),
+    [W, D] = L.useState(""),
     [g, HA] = L.useState("Weekly"),
     [Je, Ps] = L.useState("All"),
     [Vi, Ns] = L.useState("Inbox"),
@@ -11498,13 +11401,13 @@ function qi() {
     ki = L.useMemo(() => x.filter((f) => f.status === "deleted"), [x]),
     vA = L.useMemo(() => {
       let k = x.filter((Ne) => Ne.status !== "deleted").length,
-        Z = s.length + 42,
+        Z = dtCounts.bookings,
         Nn = s.filter((Ne) => Ne.status === "Successful").length,
         Pe = s.reduce((Ne, _r) => Ne + _r.base_amount, 0),
         eA = s.reduce((Ne, _r) => Ne + _r.admin_amount, 0),
-        Bs = x.length * 150000;
+        Bs = x.filter((Ne) => Ne.status !== "deleted").reduce((Ne, _r) => Ne + (Number(_r.registration_fee) || 0), 0);
       return {
-        totalCustomers: 1284,
+        totalCustomers: dtCounts.customers,
         totalCompanies: k,
         pending: Ae.length,
         approved: Rt.length,
@@ -11515,7 +11418,7 @@ function qi() {
         adminTotal: eA,
         regFees: Bs,
       };
-    }, [x, s, Ae, Rt, Xt]),
+    }, [x, s, Ae, Rt, Xt, dtCounts]),
     Oi = L.useMemo(() => {
       if (Je === "All") return s;
       return s.filter((f) => f.method === Je);
@@ -11529,19 +11432,28 @@ function qi() {
     Fs = async () => {
       V("");
       try {
-        const { error } = await dailyTravelSupabase.auth.signInWithPassword({
+        const { data: signIn, error } = await dailyTravelSupabase.auth.signInWithPassword({
           email: u.trim(),
           password: a,
         });
-        if (!error) {
-          e(!0);
-          return;
+        if (error) return V(error.message || "Invalid credentials. Check email and password.");
+        const { data: profile, error: profileError } = await dailyTravelSupabase
+          .from("users")
+          .select("role,status")
+          .eq("id", signIn.user.id)
+          .maybeSingle();
+        if (profileError) {
+          await dailyTravelSupabase.auth.signOut();
+          return V("Could not verify admin role: " + profileError.message);
         }
+        if (!profile || profile.role !== "admin" || profile.status !== "active") {
+          await dailyTravelSupabase.auth.signOut();
+          return V("This account is not an administrator. Add it to public.users with role 'admin' (see the migration notes).");
+        }
+        e(!0);
       } catch (error) {
-        console.warn("Supabase admin sign-in unavailable", error);
+        V("Sign-in failed: " + (error?.message || error));
       }
-      if (u.trim() === n && a === r && n && r) e(!0);
-      else V("Invalid credentials. Check email and password.");
     },
     ee = (f, k, Z, Nn) => {
       let Pe = {
@@ -11575,11 +11487,11 @@ function qi() {
             : Z,
         ),
       );
-      const { error } = await dailyTravelSupabase
+      const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
         .update({ approval_status: "approved", status: "approved" })
-        .eq("id", f);
-      if (error) console.warn("Company approval save failed", error.message);
+        .eq("id", f).select();
+      dailyTravelCheck("Company approval", { data: updated, error });
       ee("company_approved", "bus_companies", f, `Approved company ${f}`);
     },
     Js = async (f) => {
@@ -11590,11 +11502,11 @@ function qi() {
             : Z,
         ),
       );
-      const { error } = await dailyTravelSupabase
+      const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
         .update({ status: "deleted", rejection_reason: "Rejected by admin" })
-        .eq("id", f);
-      if (error) console.warn("Company rejection save failed", error.message);
+        .eq("id", f).select();
+      dailyTravelCheck("Company rejection", { data: updated, error });
       ee("company_rejected", "bus_companies", f, `Rejected company ${f}`);
     },
     Ks = (f) => {
@@ -11613,11 +11525,11 @@ function qi() {
             : Z,
         ),
       );
-      const { error } = await dailyTravelSupabase
+      const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
         .update({ status: "suspended", approval_status: "suspended" })
-        .eq("id", f);
-      if (error) console.warn("Company suspension save failed", error.message);
+        .eq("id", f).select();
+      dailyTravelCheck("Company suspension", { data: updated, error });
       ee("company_suspended", "bus_companies", f, `Suspended ${f}`);
     },
     js = async (f) => {
@@ -11628,20 +11540,20 @@ function qi() {
             : Z,
         ),
       );
-      const { error } = await dailyTravelSupabase
+      const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
         .update({ status: "approved", approval_status: "approved" })
-        .eq("id", f);
-      if (error) console.warn("Company unsuspension save failed", error.message);
+        .eq("id", f).select();
+      dailyTravelCheck("Company unsuspension", { data: updated, error });
       ee("company_unsuspended", "bus_companies", f, `Unsuspended ${f}`);
     },
     Ds = async (f) => {
       d((k) => k.map((Z) => (Z.id === f ? { ...Z, status: "deleted" } : Z)));
-      const { error } = await dailyTravelSupabase
+      const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
         .update({ status: "deleted" })
-        .eq("id", f);
-      if (error) console.warn("Company deletion save failed", error.message);
+        .eq("id", f).select();
+      dailyTravelCheck("Company deletion", { data: updated, error });
       ee("company_deleted", "bus_companies", f, `Deleted ${f} - ledger kept`);
     },
     bs = async () => {
@@ -11652,11 +11564,18 @@ function qi() {
         .limit(1)
         .maybeSingle();
       if (settings?.id) {
-        const { error } = await dailyTravelSupabase
+        const result = await dailyTravelSupabase
           .from("admin_settings")
           .update({ mtn_merchant_code: X, airtel_merchant_code: W })
-          .eq("id", settings.id);
-        if (error) console.warn("Payout settings save failed", error.message);
+          .eq("id", settings.id)
+          .select();
+        if (!dailyTravelCheck("Payout settings", result)) return;
+      } else {
+        const result = await dailyTravelSupabase
+          .from("admin_settings")
+          .insert({ mtn_merchant_code: X, airtel_merchant_code: W })
+          .select();
+        if (!dailyTravelCheck("Payout settings", result)) return;
       }
       ee(
         "payout_code_change",
@@ -11668,9 +11587,16 @@ function qi() {
       setTimeout(() => Ge(""), 2500);
     },
     Is = async () => {
-      if (Xi !== r) {
-        Ge("Current password incorrect");
-        return;
+      {
+        const { data: current } = await dailyTravelSupabase.auth.getUser();
+        const { error: reauthError } = await dailyTravelSupabase.auth.signInWithPassword({
+          email: current?.user?.email || n,
+          password: Xi,
+        });
+        if (reauthError) {
+          Ge("Current password incorrect");
+          return;
+        }
       }
       if (Pn && Pn !== gi) {
         Ge("New passwords do not match");
@@ -11723,7 +11649,7 @@ function qi() {
             .update(payload)
             .eq("id", existing.id)
         : await dailyTravelSupabase.from("support_settings").insert(payload);
-      Ge(result.error ? "Support settings failed to save" : "Customer support saved");
+      Ge(result.error ? "Support settings failed to save: " + result.error.message : "Customer support saved");
       setTimeout(() => Ge(""), 2500);
     },
     saveCompanySupport = async () => {
@@ -11732,10 +11658,6 @@ function qi() {
         phone: ks,
         email: Ms,
         whatsapp: ks,
-        faqs: Ni
-          .split("\n")
-          .map((faq) => faq.trim())
-          .filter(Boolean),
       };
       const { data: existing } = await dailyTravelSupabase
         .from("support_settings")
@@ -11749,7 +11671,7 @@ function qi() {
             .update(payload)
             .eq("id", existing.id)
         : await dailyTravelSupabase.from("support_settings").insert(payload);
-      Ge(result.error ? "Support settings failed to save" : "Company support saved");
+      Ge(result.error ? "Support settings failed to save: " + result.error.message : "Company support saved");
       setTimeout(() => Ge(""), 2500);
     },
     Cs = () => {
@@ -11772,6 +11694,7 @@ function qi() {
         Pe.click());
     };
   L.useEffect(() => {
+    if (!A) return undefined;
     let active = true;
     const loadAdminData = async () => {
       try {
@@ -11783,8 +11706,15 @@ function qi() {
             dailyTravelSupabase.from("admin_settings").select("*").limit(1).maybeSingle(),
             dailyTravelSupabase.from("support_settings").select("*"),
           ]);
+        const [customerCount, bookingCount] = await Promise.all([
+          dailyTravelSupabase.from("users").select("id", { count: "exact", head: true }).eq("role", "customer"),
+          dailyTravelSupabase.from("bookings").select("id", { count: "exact", head: true }),
+        ]);
         if (!active) return;
-        if (companiesResult.data?.length) {
+        setDtCounts({ customers: customerCount.count || 0, bookings: bookingCount.count || 0 });
+        const failedResult = [companiesResult, paymentsResult, auditResult, settingsResult, supportResult].find((r) => r.error);
+        if (failedResult) dailyTravelNotify("Could not load admin data: " + failedResult.error.message);
+        if (companiesResult.data) {
           d(
             companiesResult.data.map((company) => ({
               ...company,
@@ -11796,7 +11726,7 @@ function qi() {
             })),
           );
         }
-        if (paymentsResult.data?.length) {
+        if (paymentsResult.data) {
           m(
             paymentsResult.data.map((payment) => ({
               ...payment,
@@ -11819,7 +11749,7 @@ function qi() {
             })),
           );
         }
-        if (auditResult.data?.length) {
+        if (auditResult.data) {
           R(
             auditResult.data.map((entry) => ({
               ...entry,
@@ -11855,15 +11785,18 @@ function qi() {
           }
         }
       } catch (error) {
-        console.warn("Live admin data load failed; keeping the current dashboard", error);
+        dailyTravelNotify("Live admin data load failed: " + (error?.message || error));
       }
     };
+    window.dailyTravelReloadAdmin = loadAdminData;
     loadAdminData();
     return () => {
       active = false;
+      if (window.dailyTravelReloadAdmin === loadAdminData) window.dailyTravelReloadAdmin = null;
     };
-  }, []);
+  }, [A]);
   L.useEffect(() => {
+    if (!A) return undefined;
     const companyFromRow = (company) => ({
       ...company,
       mtn_code: company.merchant_mtn_code || "",
@@ -11922,7 +11855,7 @@ function qi() {
     return () => {
       dailyTravelSupabase.removeChannel(channel);
     };
-  }, []);
+  }, [A]);
   if (
     (L.useEffect(() => {
       if (Qr) document.body.style.overflow = "hidden";
