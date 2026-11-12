@@ -49,6 +49,28 @@ DO $$ BEGIN
   ALTER TABLE public.bus_companies ALTER COLUMN password_hash DROP NOT NULL;
 EXCEPTION WHEN undefined_column THEN NULL; END $$;
 
+-- Company owners are Supabase Auth users, not rows in public.users (which is for customers/admins).
+-- Replace any foreign key from bus_companies.owner_id to public.users with one to auth.users.
+DO $$
+DECLARE c record;
+BEGIN
+  FOR c IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = ANY (con.conkey)
+    WHERE con.contype = 'f'
+      AND con.conrelid = 'public.bus_companies'::regclass
+      AND att.attname = 'owner_id'
+  LOOP
+    EXECUTE format('ALTER TABLE public.bus_companies DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+  -- Owners whose auth account no longer exists would break the new constraint; detach them.
+  UPDATE public.bus_companies SET owner_id = NULL
+   WHERE owner_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM auth.users au WHERE au.id = bus_companies.owner_id);
+  ALTER TABLE public.bus_companies
+    ADD CONSTRAINT bus_companies_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users (id) ON DELETE SET NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS public.buses (id uuid PRIMARY KEY DEFAULT gen_random_uuid());
 ALTER TABLE public.buses
   ADD COLUMN IF NOT EXISTS company_id uuid,
@@ -273,6 +295,20 @@ FROM auth.users au
 WHERE NOT EXISTS (SELECT 1 FROM public.users u WHERE u.id = au.id)
   AND NOT EXISTS (SELECT 1 FROM public.bus_companies c WHERE c.owner_id = au.id)
   AND coalesce(au.raw_user_meta_data->>'role','') <> 'company';
+
+-- Backfill companies that registered before this update: they have a company Auth account but
+-- (if the old browser insert was blocked) no bus_companies row. Created as 'pending' for admin review.
+-- Also link rows whose owner_id was never set, by matching the login email.
+UPDATE public.bus_companies c SET owner_id = au.id
+FROM auth.users au
+WHERE c.owner_id IS NULL AND lower(au.email) = lower(c.email);
+INSERT INTO public.bus_companies (owner_id, company_name, trading_name, phone, email, status, approval_status)
+SELECT au.id, coalesce(au.raw_user_meta_data->>'company_name', split_part(au.email,'@',1)),
+       coalesce(au.raw_user_meta_data->>'company_name', split_part(au.email,'@',1)),
+       au.raw_user_meta_data->>'phone', au.email, 'pending', 'pending'
+FROM auth.users au
+WHERE au.raw_user_meta_data->>'role' = 'company'
+  AND NOT EXISTS (SELECT 1 FROM public.bus_companies c WHERE c.owner_id = au.id);
 
 -- ---------------------------------------------------------------------------
 -- 4. Seats are generated automatically when a schedule is created.
