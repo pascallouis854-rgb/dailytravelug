@@ -1905,6 +1905,22 @@ summary {
   }
 }
 </style>
+<style id="dt-mobile">
+  html{-webkit-text-size-adjust:100%}
+  body{overscroll-behavior-y:none;-webkit-tap-highlight-color:transparent}
+  button{touch-action:manipulation}
+  @media (min-width:768px){
+    .md\:grid-cols-4 > :last-child{grid-column:1/-1;max-width:420px}
+  }
+  @media (max-width:640px){
+    input,select,textarea{font-size:16px !important}
+    header{position:sticky;top:0;z-index:30;box-shadow:0 2px 12px rgba(11,42,91,.08)}
+    .fixed.bottom-0{padding-bottom:env(safe-area-inset-bottom)}
+    .dtx-fab{bottom:calc(86px + env(safe-area-inset-bottom)) !important;width:50px !important;height:50px !important}
+    .fixed.inset-0 > div{max-height:94vh}
+    h1,h2{letter-spacing:-.01em}
+  }
+</style>
 </head>
 <body>
   <div id="root"></div>
@@ -12961,12 +12977,17 @@ function co() {
         const base = (k.raw_fare ?? k.fare) * C.length;
         const admin = Math.round((base * dtPct()) / 100);
         const total = base + admin;
+        const { data: { session: dtSession } } = await dailyTravelSupabase.auth.getSession();
+        if (!dtSession) {
+          yo(!1);
+          return alert("Your session has expired. Please sign out, sign in again as a customer, and retry.");
+        }
         const { data: reserved, error: reserveError } =
           await dailyTravelSupabase.rpc("reserve_booking", {
             p_company_id: k.company_id,
             p_schedule_id: k.id,
             p_stop_id: k.stop_id || null,
-            p_customer_id: r.id,
+            p_customer_id: dtSession.user.id,
             p_seat_numbers: C,
             p_payment_method: ve,
             p_expected_total: total,
@@ -14353,34 +14374,25 @@ function co() {
                                       ],
                                     }),
                                     c("div", {
-                                      className: "flex items-center gap-3 mt-3",
+                                      style: { marginTop: 12, background: "linear-gradient(135deg,#F2F9FF,#ECFBFA)", borderRadius: 14, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 },
                                       children: [
-                                        f("span", {
-                                          className:
-                                            "font-bold text-[20px] text-[#202124]",
-                                          children: o.departure_time,
-                                        }),
-                                        f("div", {
-                                          className:
-                                            "flex-1 h-[1px] bg-[#E0E0E0] relative",
-                                          children: f("div", {
-                                            className:
-                                              "absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-[#0798E3]",
-                                          }),
-                                        }),
-                                        f("span", {
-                                          className:
-                                            "font-bold text-[20px] text-[#202124]",
-                                          children: o.arrival_time,
-                                        }),
+                                        c("div", { style: { flex: 1, minWidth: 0 }, children: [
+                                          f("p", { style: { fontWeight: 800, fontSize: 16, color: "#0B2A5B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: o.origin }),
+                                          f("p", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 }, children: o.departure_time }),
+                                        ] }),
+                                        f("div", { style: { color: "#0798E3", fontSize: 20, fontWeight: 700 }, children: "\u279C" }),
+                                        c("div", { style: { flex: 1, minWidth: 0, textAlign: "right" }, children: [
+                                          f("p", { style: { fontWeight: 800, fontSize: 16, color: "#0B2A5B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: o.destination }),
+                                          f("p", { style: { fontSize: 11, color: "#6B7280", marginTop: 2 }, children: o.arrival_time && o.arrival_time !== o.departure_time ? "Arrives " + o.arrival_time : "" }),
+                                        ] }),
                                       ],
                                     }),
                                     c("p", {
-                                      className: "text-[11px] text-[#888] mt-1",
+                                      style: { fontSize: 12, color: "#6B7280", marginTop: 8 },
                                       children: [
-                                        o.origin_terminal,
-                                        " → ",
-                                        o.destination_terminal,
+                                        "\ud83d\udcc5 ",
+                                        o.date,
+                                        o.origin_terminal || o.destination_terminal ? " \u2022 " + [o.origin_terminal, o.destination_terminal].filter(Boolean).join(" \u2192 ") : "",
                                       ],
                                     }),
                                     c("div", {
@@ -14419,7 +14431,7 @@ function co() {
                                     }),
                                   ],
                                 },
-                                o.id,
+                                o.id + "-" + (o.stop_id || ""),
                               );
                             }),
                           }),
