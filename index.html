@@ -12200,6 +12200,85 @@ function CompanyOps({ company, tab }) {
         ]),
     ];
   }
+
+  // ---------- customer Settings screen ----------
+  window.DailyTravelSettings = function DailyTravelSettings({ user, onSaved }) {
+    const empty = { full_name: "", phone: "", date_of_birth: "", gender: "", address: "", city: "", nationality: "", id_number: "", emergency_contact_name: "", emergency_contact_phone: "" };
+    const [form, setForm] = M.useState({ ...empty, ...Object.fromEntries(Object.keys(empty).map((k) => [k, (user && user[k]) || ""])) });
+    const [busy, setBusy] = M.useState(false);
+    const [msg, setMsg] = M.useState(null);
+    const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+    const input = { className: "dtx-in", style: { width: "100%" } };
+    const field = (label, key, props) => h("label", { key, style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: C.grey } }, label, h("input", { ...input, value: form[key], onChange: set(key), ...(props || {}) }));
+    if (!user) return null;
+    const save = async () => {
+      if (!form.full_name.trim()) return setMsg({ bad: true, text: "Please enter your full name" });
+      setBusy(true); setMsg(null);
+      const payload = { ...form, date_of_birth: form.date_of_birth || null };
+      const { error } = await sb.from("users").update(payload).eq("id", user.id);
+      setBusy(false);
+      if (error) return setMsg({ bad: true, text: "Could not save: " + error.message });
+      onSaved && onSaved({ ...user, ...payload });
+      setMsg({ text: "Your details have been saved." });
+    };
+    const upload = async (file) => {
+      if (!file) return;
+      if (!["image/png", "image/jpeg"].includes(file.type)) return setMsg({ bad: true, text: "Please choose a PNG or JPG image" });
+      if (file.size > 2 * 1024 * 1024) return setMsg({ bad: true, text: "The image must be 2 MB or smaller" });
+      setBusy(true); setMsg(null);
+      try {
+        const path = `${user.id}/avatar-${Date.now()}.${file.type === "image/png" ? "png" : "jpg"}`;
+        const { error } = await sb.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+        if (error) throw error;
+        const url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl;
+        const { error: e2 } = await sb.from("users").update({ avatar_url: url }).eq("id", user.id);
+        if (e2) throw e2;
+        onSaved && onSaved({ ...user, avatar_url: url });
+        setMsg({ text: "Profile picture updated." });
+      } catch (e) { setMsg({ bad: true, text: e.message || "Upload failed" }); }
+      setBusy(false);
+    };
+    const del = async () => {
+      if (!confirm("Delete your account permanently? Your login, profile and notifications are removed. Tickets and receipts stay with the bus company for their records.")) return;
+      if (prompt("Type DELETE to confirm") !== "DELETE") return;
+      setBusy(true);
+      try { await dailyTravelInvokeFunction("delete-account", { confirm: "DELETE" }); await sb.auth.signOut(); location.reload(); }
+      catch (e) { setMsg({ bad: true, text: e.message }); setBusy(false); }
+    };
+    const avatar = user.avatar_url
+      ? h("img", { className: "dtx-av", src: user.avatar_url, alt: "Profile picture" })
+      : h("div", { className: "dtx-av", style: { display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, fontWeight: 800, color: "#fff", background: "linear-gradient(135deg,#0798E3,#62C9C5)" } }, (user.full_name || "U").slice(0, 1).toUpperCase());
+    return h("div", { style: { maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14, paddingBottom: 90 } },
+      h("h2", { style: { fontWeight: 800, fontSize: 18 } }, "Settings"),
+      h("div", { style: { background: "#fff", border: "1px solid #E6EEF7", borderRadius: 18, padding: 18, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" } },
+        avatar,
+        h("div", { style: { flex: 1, minWidth: 160 } },
+          h("p", { style: { fontWeight: 800, fontSize: 16 } }, user.full_name || "Customer"),
+          h("p", { style: { fontSize: 12, color: C.grey, wordBreak: "break-all" } }, user.email),
+          h("label", { className: "dtx-btn alt", style: { display: "inline-block", marginTop: 8, fontSize: 12 } }, busy ? "Please wait..." : "Change profile picture",
+            h("input", { type: "file", accept: "image/png,image/jpeg", style: { display: "none" }, onChange: (e) => upload(e.target.files[0]) })),
+          h("p", { className: "dtx-muted", style: { marginTop: 4 } }, "PNG or JPG, up to 2 MB"))),
+      h("div", { style: { background: "#fff", border: "1px solid #E6EEF7", borderRadius: 18, padding: 18, display: "flex", flexDirection: "column", gap: 12 } },
+        h("h3", { style: { fontWeight: 700, fontSize: 14, color: C.navy } }, "Personal details"),
+        field("Full name", "full_name"),
+        field("Phone number", "phone", { type: "tel", placeholder: "07xx xxx xxx" }),
+        field("Date of birth", "date_of_birth", { type: "date", max: new Date().toISOString().slice(0, 10) }),
+        h("label", { style: { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: C.grey } }, "Gender",
+          h("select", { ...input, value: form.gender, onChange: set("gender") }, h("option", { value: "" }, "Prefer not to say"), h("option", { value: "female" }, "Female"), h("option", { value: "male" }, "Male"), h("option", { value: "other" }, "Other"))),
+        field("Home address", "address"),
+        field("City / town", "city"),
+        field("Nationality", "nationality"),
+        field("National ID or passport number", "id_number"),
+        h("h3", { style: { fontWeight: 700, fontSize: 14, color: C.navy, marginTop: 6 } }, "Emergency contact"),
+        field("Contact name", "emergency_contact_name"),
+        field("Contact phone", "emergency_contact_phone", { type: "tel" }),
+        msg && h("p", { style: { fontSize: 13, color: msg.bad ? "#C62828" : "#2E7D32", fontWeight: 600 } }, msg.text),
+        h("button", { className: "dtx-btn", disabled: busy, onClick: save }, busy ? "Saving..." : "Save changes")),
+      h("div", { style: { background: "#fff", border: "1px solid #FFCDD2", borderRadius: 18, padding: 18 } },
+        h("h3", { style: { fontWeight: 700, fontSize: 14, color: "#C62828" } }, "Delete account"),
+        h("p", { className: "dtx-muted", style: { margin: "6px 0 12px" } }, "This permanently removes your login, profile and notifications. Tickets and receipts stay with the bus company for their records. This cannot be undone."),
+        h("button", { className: "dtx-btn danger", disabled: busy, onClick: del }, "Delete my account")));
+  };
   const host = document.createElement("div");
   host.id = "dtx-root";
   document.body.appendChild(host);
@@ -14935,61 +15014,7 @@ function co() {
                           }),
                         ],
                       }),
-                    u === "settings" &&
-                      c("div", {
-                        className: "max-w-[600px] mx-auto",
-                        children: [
-                          f("h2", {
-                            className: "font-bold text-[18px] mb-4",
-                            children: "Settings",
-                          }),
-                          c("div", {
-                            className:
-                              "bg-white rounded-[16px] border border-[#EEE] p-6 flex flex-col gap-4",
-                            children: [
-                              c("div", {
-                                className: "flex items-center gap-4",
-                                children: [
-                                  f("div", {
-                                    className:
-                                      "w-16 h-16 rounded-full bg-[#0798E3] text-white flex items-center justify-center font-bold text-[18px]",
-                                    children: r?.full_name?.[0] || "U",
-                                  }),
-                                  c("div", {
-                                    children: [
-                                      f("p", {
-                                        className: "font-bold text-[15px]",
-                                        children: r?.full_name || "User",
-                                      }),
-                                      f("p", {
-                                        className: "text-[12px] text-[#888]",
-                                        children: r?.email,
-                                      }),
-                                    ],
-                                  }),
-                                ],
-                              }),
-                              f("input", {
-                                defaultValue: r?.full_name || "",
-                                placeholder: "Full Name",
-                                className:
-                                  "rounded-[10px] border border-[#E0E0E0] px-4 py-3 text-[14px]",
-                              }),
-                              f("input", {
-                                defaultValue: r?.phone || "",
-                                placeholder: "Phone",
-                                className:
-                                  "rounded-[10px] border border-[#E0E0E0] px-4 py-3 text-[14px]",
-                              }),
-                              f("button", {
-                                className:
-                                  "bg-[#0798E3] text-white rounded-[12px] py-3 font-semibold",
-                                children: "Save Changes",
-                              }),
-                            ],
-                          }),
-                        ],
-                      }),
+                    u === "settings" && f(window.DailyTravelSettings, { user: r, onSaved: (nu) => l(nu) }),
                   ],
                 })
               : c(se, {
