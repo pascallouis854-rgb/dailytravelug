@@ -11684,7 +11684,7 @@ function CompanyOps({ company, tab }) {
     await run("Add route", sb.from("routes").insert({
       company_id: cid, branch_id: routeForm.branch_id || null, origin_city: routeForm.origin_city.trim(), destination_city: routeForm.destination_city.trim(),
       origin_terminal: routeForm.origin_terminal.trim() || null, destination_terminal: routeForm.destination_terminal.trim() || null,
-      distance_km: routeForm.distance_km ? Number(routeForm.distance_km) : null, base_price: routeForm.base_price ? Number(routeForm.base_price) : null, status: "active",
+      distance_km: routeForm.distance_km ? Number(routeForm.distance_km) : null, base_price: routeForm.base_price ? Number(routeForm.base_price) : null, base_fare: routeForm.base_price ? Number(routeForm.base_price) : null, status: "active",
     }), "Route added");
     setRouteForm({ ...routeForm, origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
   };
