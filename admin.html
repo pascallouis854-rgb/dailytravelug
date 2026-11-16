@@ -11358,6 +11358,464 @@ var Wm = [
       timestamp: "2026-04-18 09:30",
     },
   ];
+// ---- Admin panels (live Supabase data, colourful theme) ----
+const dtFunctionsBase = `${DAILY_TRAVEL_SUPABASE_URL}/functions/v1`;
+const dtFn = (slug) => ({ "delete-account": "Daily-Travel-Delete-Account" })[slug] || slug;
+async function dtEdge(slug, body) {
+  const { data: { session } } = await dailyTravelSupabase.auth.getSession();
+  if (!session) throw new Error("Please sign in again");
+  const response = await fetch(`${dtFunctionsBase}/${dtFn(slug)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${session.access_token}`, apikey: DAILY_TRAVEL_SUPABASE_PUBLISHABLE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json.error) throw new Error(json.error || `Request failed (${response.status})`);
+  return json;
+}
+
+const DT = { navy: "#0B2A5B", blue: "#0798E3", sky: "#62C9C5", amber: "#FDB515", green: "#16A34A", red: "#EF4444", purple: "#7C3AED", ink: "#111827", mute: "#6B7280", line: "#E8EEF7" };
+const dtMoney = (n) => "UGX " + Math.round(Number(n) || 0).toLocaleString("en-UG");
+const dtNum = (n) => Math.round(Number(n) || 0).toLocaleString("en-UG");
+const dtDate = (v, time) => {
+  if (!v) return "";
+  const d = new Date(String(v).replace(" ", "T"));
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleString("en-UG", time ? { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" } : { day: "2-digit", month: "short", year: "numeric" });
+};
+const dtSod = (v) => { const d = new Date(v); d.setHours(0, 0, 0, 0); return d; };
+const dtAddDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const dtPct = (settings) => { const v = Number(settings && settings.commission_percent); return Number.isFinite(v) ? v : 2; };
+const dtPctText = (v) => (Math.round(v * 100) / 100).toString();
+
+function dtBuckets(period, now = new Date()) {
+  const out = [];
+  const today = dtSod(now);
+  if (period === "Daily") {
+    for (let k = 29; k >= 0; k--) { const s = dtAddDays(today, -k); out.push({ start: s, end: dtAddDays(s, 1), label: s.toLocaleDateString("en-UG", { day: "2-digit", month: "short" }) }); }
+  } else if (period === "Weekly") {
+    const monday = dtAddDays(today, -((today.getDay() + 6) % 7));
+    for (let k = 11; k >= 0; k--) {
+      const s = dtAddDays(monday, -7 * k), e = dtAddDays(s, 7);
+      out.push({ start: s, end: e, label: `${s.toLocaleDateString("en-UG", { day: "2-digit", month: "short" })} - ${dtAddDays(e, -1).toLocaleDateString("en-UG", { day: "2-digit", month: "short" })}`, short: s.toLocaleDateString("en-UG", { day: "2-digit", month: "short" }) });
+    }
+  } else {
+    for (let k = 11; k >= 0; k--) {
+      const s = new Date(today.getFullYear(), today.getMonth() - k, 1), e = new Date(today.getFullYear(), today.getMonth() - k + 1, 1);
+      out.push({ start: s, end: e, label: s.toLocaleDateString("en-UG", { month: "long", year: "numeric" }), short: s.toLocaleDateString("en-UG", { month: "short" }) });
+    }
+  }
+  return out;
+}
+function dtPeriodStart(period) {
+  const today = dtSod(new Date());
+  return period === "Daily" ? today : period === "Weekly" ? dtAddDays(today, -6) : dtAddDays(today, -29);
+}
+// Successful payments only; raw payment rows are in p.payments (mapped rows keep every DB column).
+const dtPaid = (payments) => payments.filter((x) => x.status === "Successful" || x.status === "successful");
+function dtEarningsByBucket(buckets, payments, regPayments) {
+  const paid = dtPaid(payments);
+  return buckets.map((b) => {
+    let tickets = 0, commission = 0, gross = 0, fees = 0;
+    paid.forEach((x) => {
+      const t = new Date(x.created_at || x.timestamp);
+      if (t >= b.start && t < b.end) { tickets += 1; commission += Number(x.admin_amount) || 0; gross += Number(x.amount ?? x.total) || 0; }
+    });
+    regPayments.forEach((r) => {
+      if (r.status !== "confirmed") return;
+      const t = new Date(r.confirmed_at || r.created_at);
+      if (t >= b.start && t < b.end) fees += Number(r.amount) || 0;
+    });
+    return { ...b, tickets, commission, gross, fees, total: commission + fees };
+  });
+}
+
+/* ------------------------------ live data hook ------------------------------ */
+function useAdminLive(on) {
+  const [notifications, setNotifications] = L.useState([]);
+  const [sent, setSent] = L.useState([]);
+  const [regPayments, setRegPayments] = L.useState([]);
+  const [settings, setSettings] = L.useState(null);
+  const loadNotifications = L.useCallback(async () => {
+    let rows = null;
+    const rpc = await dailyTravelSupabase.rpc("my_notifications", { p_limit: 100 });
+    if (!rpc.error && Array.isArray(rpc.data)) rows = rpc.data;
+    else {
+      const fallback = await dailyTravelSupabase.from("notifications").select("*").eq("audience_type", "admin").order("created_at", { ascending: false }).limit(100);
+      if (fallback.error) { console.warn("Notifications load failed", rpc.error?.message || fallback.error.message); return; }
+      rows = (fallback.data || []).map((n) => ({ ...n, read: !!n.is_read }));
+    }
+    setNotifications(rows);
+    const sentRes = await dailyTravelSupabase.from("notifications").select("*").eq("sender_role", "admin").order("created_at", { ascending: false }).limit(40);
+    if (!sentRes.error) setSent(sentRes.data || []);
+  }, []);
+  const loadSettings = L.useCallback(async () => {
+    const res = await dailyTravelSupabase.from("admin_settings").select("*").limit(1).maybeSingle();
+    if (!res.error) setSettings(res.data || {});
+  }, []);
+  const loadReg = L.useCallback(async () => {
+    const res = await dailyTravelSupabase.from("registration_payments").select("*").order("created_at", { ascending: false });
+    if (!res.error) setRegPayments(res.data || []);
+  }, []);
+  L.useEffect(() => {
+    if (!on) return undefined;
+    loadNotifications(); loadSettings(); loadReg();
+    let timer = null;
+    const later = (fn) => { clearTimeout(timer); timer = setTimeout(fn, 300); };
+    const channel = dailyTravelSupabase
+      .channel("admin-extra-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => later(loadNotifications))
+      .on("postgres_changes", { event: "*", schema: "public", table: "registration_payments" }, () => later(loadReg))
+      .on("postgres_changes", { event: "*", schema: "public", table: "admin_settings" }, () => later(loadSettings))
+      .subscribe();
+    return () => { clearTimeout(timer); dailyTravelSupabase.removeChannel(channel); };
+  }, [on]);
+  const markRead = async (id) => {
+    setNotifications((rows) => rows.map((n) => (n.id === id ? { ...n, read: true, is_read: true } : n)));
+    const res = await dailyTravelSupabase.rpc("mark_notification_read", { p_id: id });
+    if (res.error) dailyTravelNotify("Could not mark as read: " + res.error.message);
+  };
+  const markAllRead = async () => { for (const n of notifications.filter((x) => !x.read)) await markRead(n.id); };
+  return { notifications, sent, regPayments, settings, setSettings, unread: notifications.filter((n) => !n.read).length, markRead, markAllRead, reloadNotifications: loadNotifications, reloadSettings: loadSettings, reloadReg: loadReg };
+}
+
+/* --------------------------------- charts ----------------------------------- */
+let dtGradId = 0;
+function DtLineChart({ labels, series, height = 230 }) {
+  const h = L.createElement;
+  const [gid] = L.useState(() => "dtg" + ++dtGradId);
+  const W = 640, H = height, ml = 54, mr = 14, mt = 14, mb = 30;
+  const max = Math.max(1, ...series.flatMap((s) => s.values));
+  const niceMax = (() => { const p = Math.pow(10, Math.floor(Math.log10(max))); return Math.ceil(max / p) * p; })();
+  const x = (k) => ml + (labels.length <= 1 ? 0 : (k * (W - ml - mr)) / (labels.length - 1));
+  const y = (v) => mt + (H - mt - mb) * (1 - v / niceMax);
+  const fmtTick = (v) => (v >= 1e6 ? (v / 1e6).toFixed(v % 1e6 ? 1 : 0) + "M" : v >= 1e3 ? Math.round(v / 1e3) + "K" : String(Math.round(v)));
+  const step = Math.max(1, Math.ceil(labels.length / 7));
+  return h("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height: "auto", display: "block" }, role: "img", "aria-label": "Revenue chart" },
+    h("defs", null, series.map((s, n) => h("linearGradient", { key: n, id: `${gid}-${n}`, x1: 0, y1: 0, x2: 0, y2: 1 }, h("stop", { offset: "0%", stopColor: s.color, stopOpacity: 0.35 }), h("stop", { offset: "100%", stopColor: s.color, stopOpacity: 0 })))),
+    [0, 1, 2, 3, 4].map((k) => { const v = (niceMax * k) / 4; return h("g", { key: k }, h("line", { x1: ml, x2: W - mr, y1: y(v), y2: y(v), stroke: DT.line, strokeDasharray: "4 4" }), h("text", { x: ml - 8, y: y(v) + 4, fontSize: 11, fill: DT.mute, textAnchor: "end" }, fmtTick(v))); }),
+    series.map((s, n) => {
+      const pts = s.values.map((v, k) => `${x(k)},${y(v)}`);
+      return h("g", { key: s.name },
+        n === 0 ? h("path", { d: `M ${x(0)},${y(0)} L ${pts.join(" L ")} L ${x(labels.length - 1)},${y(0)} Z`, fill: `url(#${gid}-${n})` }) : null,
+        h("polyline", { points: pts.join(" "), fill: "none", stroke: s.color, strokeWidth: 2.5, strokeLinejoin: "round", strokeLinecap: "round" }),
+        s.values.map((v, k) => h("circle", { key: k, cx: x(k), cy: y(v), r: 3.5, fill: "#fff", stroke: s.color, strokeWidth: 2 }, h("title", null, `${labels[k]}: ${dtMoney(v)}`))));
+    }),
+    labels.map((lb, k) => (k % step === 0 || k === labels.length - 1 ? h("text", { key: k, x: x(k), y: H - 8, fontSize: 11, fill: DT.mute, textAnchor: "middle" }, lb) : null)));
+}
+function DtBarChart({ labels, values, height = 230 }) {
+  const h = L.createElement;
+  const [gid] = L.useState(() => "dtb" + ++dtGradId);
+  const W = 640, H = height, ml = 54, mr = 10, mt = 14, mb = 30;
+  const max = Math.max(1, ...values);
+  const p = Math.pow(10, Math.floor(Math.log10(max)));
+  const niceMax = Math.ceil(max / p) * p;
+  const bw = (W - ml - mr) / Math.max(1, values.length);
+  const fmtTick = (v) => (v >= 1e6 ? (v / 1e6).toFixed(v % 1e6 ? 1 : 0) + "M" : v >= 1e3 ? Math.round(v / 1e3) + "K" : String(Math.round(v)));
+  const step = Math.max(1, Math.ceil(labels.length / 8));
+  return h("svg", { viewBox: `0 0 ${W} ${H}`, style: { width: "100%", height: "auto", display: "block" }, role: "img", "aria-label": "Earnings chart" },
+    h("defs", null, h("linearGradient", { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, h("stop", { offset: "0%", stopColor: DT.blue }), h("stop", { offset: "100%", stopColor: DT.purple }))),
+    [0, 1, 2, 3, 4].map((k) => { const v = (niceMax * k) / 4; const yy = mt + (H - mt - mb) * (1 - v / niceMax); return h("g", { key: k }, h("line", { x1: ml, x2: W - mr, y1: yy, y2: yy, stroke: DT.line, strokeDasharray: "4 4" }), h("text", { x: ml - 8, y: yy + 4, fontSize: 11, fill: DT.mute, textAnchor: "end" }, fmtTick(v))); }),
+    values.map((v, k) => { const bh = (H - mt - mb) * (v / niceMax); return h("rect", { key: k, x: ml + k * bw + bw * 0.18, y: H - mb - bh, width: bw * 0.64, height: Math.max(bh, v > 0 ? 2 : 0), rx: 5, fill: `url(#${gid})` }, h("title", null, `${labels[k]}: ${dtMoney(v)}`)); }),
+    labels.map((lb, k) => (k % step === 0 ? h("text", { key: k, x: ml + k * bw + bw / 2, y: H - 8, fontSize: 11, fill: DT.mute, textAnchor: "middle" }, lb) : null)));
+}
+const DT_PALETTE = ["#0798E3", "#FDB515", "#16A34A", "#7C3AED", "#EF4444", "#0EA5E9", "#F97316", "#14B8A6"];
+function DtDonut({ slices, centerLabel, centerValue }) {
+  const h = L.createElement;
+  const total = slices.reduce((n, s) => n + s.value, 0);
+  const R = 62, C = 2 * Math.PI * R;
+  let acc = 0;
+  return h("div", { style: { display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", justifyContent: "center" } },
+    h("svg", { viewBox: "0 0 160 160", width: 160, height: 160, role: "img", "aria-label": "Revenue split" },
+      h("circle", { cx: 80, cy: 80, r: R, fill: "none", stroke: "#EEF2F8", strokeWidth: 22 }),
+      total > 0 ? slices.map((s, k) => { const len = (s.value / total) * C; const el = h("circle", { key: k, cx: 80, cy: 80, r: R, fill: "none", stroke: s.color, strokeWidth: 22, strokeDasharray: `${len} ${C - len}`, strokeDashoffset: -acc, transform: "rotate(-90 80 80)" }, h("title", null, `${s.label}: ${dtMoney(s.value)}`)); acc += len; return el; }) : null,
+      h("text", { x: 80, y: 76, textAnchor: "middle", fontSize: 11, fill: DT.mute }, centerLabel),
+      h("text", { x: 80, y: 94, textAnchor: "middle", fontSize: 13, fontWeight: 700, fill: DT.ink }, centerValue)),
+    h("div", { style: { display: "grid", gap: 6, fontSize: 12, minWidth: 140 } }, slices.length ? slices.map((s, k) => h("div", { key: k, style: { display: "flex", alignItems: "center", gap: 8 } }, h("span", { style: { width: 10, height: 10, borderRadius: 3, background: s.color, flex: "none" } }), h("span", { style: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, s.label), h("b", null, total ? Math.round((s.value / total) * 100) + "%" : "0%"))) : h("span", { style: { color: DT.mute } }, "No payments yet")));
+}
+
+/* ------------------------------ small UI pieces ----------------------------- */
+const dtCardStyle = { background: "#fff", borderRadius: 18, padding: 20, boxShadow: "0 4px 18px rgba(11,42,91,.07)", border: "1px solid #EEF2F8" };
+const dtInputStyle = { width: "100%", height: 42, padding: "0 12px", borderRadius: 12, border: "1px solid #D8E1EF", fontSize: 14, background: "#fff", color: DT.ink, outline: "none", boxSizing: "border-box" };
+const dtBtnStyle = (bg, fg) => ({ background: bg || DT.blue, color: fg || "#fff", border: 0, borderRadius: 12, padding: "9px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" });
+const DtPill = ({ text, bg, fg }) => L.createElement("span", { style: { background: bg, color: fg, fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 999, whiteSpace: "nowrap" } }, text);
+const DtTitle = ({ title, sub, right }) => { const h = L.createElement; return h("div", { style: { display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 18 } }, h("div", null, h("h2", { style: { fontSize: 24, fontWeight: 800, color: DT.navy, margin: 0 } }, title), sub ? h("p", { style: { fontSize: 13, color: DT.mute, margin: "4px 0 0" } }, sub) : null), right || null); };
+const DtSegment = ({ value, options, onChange }) => { const h = L.createElement; return h("div", { style: { display: "inline-flex", background: "#fff", padding: 4, borderRadius: 999, border: "1px solid " + DT.line, boxShadow: "0 2px 8px rgba(11,42,91,.05)" } }, options.map((o) => h("button", { key: o, onClick: () => onChange(o), style: { border: 0, cursor: "pointer", padding: "7px 16px", borderRadius: 999, fontSize: 13, fontWeight: 600, background: value === o ? "linear-gradient(135deg," + DT.navy + "," + DT.blue + ")" : "transparent", color: value === o ? "#fff" : DT.mute } }, o))); };
+const DtKpi = ({ label, value, sub, gradient, icon }) => { const h = L.createElement; return h("div", { style: { borderRadius: 18, padding: 18, color: "#fff", background: gradient, boxShadow: "0 8px 22px rgba(11,42,91,.14)", position: "relative", overflow: "hidden", minHeight: 108 } }, h("div", { style: { position: "absolute", right: -18, top: -18, width: 90, height: 90, borderRadius: "50%", background: "rgba(255,255,255,.16)" } }), h("div", { style: { fontSize: 22, marginBottom: 4 } }, icon), h("div", { style: { fontSize: 12, opacity: 0.92, fontWeight: 600 } }, label), h("div", { style: { fontSize: 24, fontWeight: 800, marginTop: 2 } }, value), sub ? h("div", { style: { fontSize: 11, opacity: 0.9, marginTop: 2 } }, sub) : null); };
+const DT_KPI = { blue: "linear-gradient(135deg,#0798E3,#38BDF8)", amber: "linear-gradient(135deg,#F59E0B,#FDB515)", green: "linear-gradient(135deg,#059669,#34D399)", purple: "linear-gradient(135deg,#6D28D9,#A78BFA)", red: "linear-gradient(135deg,#DC2626,#FB7185)", navy: "linear-gradient(135deg,#0B2A5B,#1D4ED8)" };
+const DtAvatar = ({ company, size = 48 }) => { const h = L.createElement; return company.logo_url ? h("img", { src: company.logo_url, alt: "", style: { width: size, height: size, borderRadius: 14, objectFit: "cover", background: "#EEF4FF", flex: "none" } }) : h("div", { style: { width: size, height: size, borderRadius: 14, background: "linear-gradient(135deg,#E0F2FE,#DDD6FE)", color: DT.navy, fontWeight: 800, fontSize: size * 0.4, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" } }, (company.company_name || "?").slice(0, 1).toUpperCase()); };
+const dtStatusPill = (c) => c.status === "suspended" ? L.createElement(DtPill, { text: "Suspended", bg: "#FEE2E2", fg: "#B91C1C" }) : c.approval_status === "approved" ? L.createElement(DtPill, { text: "Approved", bg: "#DCFCE7", fg: "#15803D" }) : c.approval_status === "rejected" ? L.createElement(DtPill, { text: "Rejected", bg: "#F3F4F6", fg: "#4B5563" }) : L.createElement(DtPill, { text: "Pending", bg: "#FEF3C7", fg: "#B45309" });
+const dtTableWrap = (...kids) => L.createElement("div", { style: { overflowX: "auto" } }, L.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 } }, ...kids));
+const dtTh = { textAlign: "left", padding: "10px 12px", fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: DT.mute, background: "#F6F9FE", whiteSpace: "nowrap" };
+const dtTd = { padding: "11px 12px", borderBottom: "1px solid #F0F4FA", verticalAlign: "middle" };
+
+function dtEffectiveFee(company, settings) {
+  if (company.registration_fee_amount === null || company.registration_fee_amount === undefined) return { amount: Number(settings && settings.registration_fee_amount) || 0, custom: false };
+  return { amount: Number(company.registration_fee_amount) || 0, custom: true };
+}
+const dtMethodLabel = (m) => (m === "airtel_money" ? "Airtel Money" : m === "bank" ? "Bank transfer" : "MTN MoMo");
+
+/* ------------------------------- fee editor --------------------------------- */
+function DtFeeEditor({ company, settings, onSave }) {
+  const h = L.createElement;
+  const eff = dtEffectiveFee(company, settings);
+  const [val, setVal] = L.useState(String(eff.amount));
+  L.useEffect(() => { setVal(String(dtEffectiveFee(company, settings).amount)); }, [company.registration_fee_amount, settings && settings.registration_fee_amount]);
+  return h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+    h("input", { type: "number", min: 0, value: val, onChange: (e) => setVal(e.target.value), style: { ...dtInputStyle, width: 130, height: 36 }, "aria-label": "Registration fee" }),
+    h("button", { style: dtBtnStyle(DT.blue), onClick: () => onSave(company, Math.max(0, Number(val) || 0)) }, "Set fee"),
+    h("button", { style: dtBtnStyle("#FEE2E2", "#B91C1C"), onClick: () => onSave(company, 0) }, "Remove fee"),
+    eff.custom ? h("button", { style: dtBtnStyle("#EEF2F8", DT.navy), onClick: () => onSave(company, null) }, "Use default") : null,
+    h("span", { style: { fontSize: 11, color: DT.mute } }, eff.custom ? "Custom fee" : "Platform default"));
+}
+
+/* --------------------------------- panels ----------------------------------- */
+function OverviewPanel(p) {
+  const h = L.createElement;
+  const pct = dtPct(p.settings);
+  const start = dtPeriodStart(p.period);
+  const paid = dtPaid(p.payments);
+  const inPeriod = paid.filter((x) => new Date(x.created_at || x.timestamp) >= start);
+  const commission = inPeriod.reduce((n, x) => n + (Number(x.admin_amount) || 0), 0);
+  const feeTotal = p.regPayments.filter((r) => r.status === "confirmed" && new Date(r.confirmed_at || r.created_at) >= start).reduce((n, r) => n + (Number(r.amount) || 0), 0);
+  const buckets = dtBuckets("Daily").slice(-14);
+  const eb = dtEarningsByBucket(buckets, p.payments, p.regPayments);
+  const nameOf = (id) => (p.companies.find((c) => c.id === id) || {}).company_name || "Other";
+  const byCompany = {};
+  paid.forEach((x) => { const k = x.company_id || "-"; byCompany[k] = byCompany[k] || { id: k, revenue: 0, tickets: 0 }; byCompany[k].revenue += Number(x.amount ?? x.total) || 0; byCompany[k].tickets += 1; });
+  const ranked = Object.values(byCompany).sort((a, b) => b.revenue - a.revenue);
+  const slices = ranked.slice(0, 5).map((r, k) => ({ label: nameOf(r.id), value: r.revenue, color: DT_PALETTE[k] }));
+  const rest = ranked.slice(5).reduce((n, r) => n + r.revenue, 0);
+  if (rest > 0) slices.push({ label: "Others", value: rest, color: "#94A3B8" });
+  const recent = [...p.companies].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 5);
+  const pendingList = p.pending.slice(0, 4);
+  const active = p.approved.length;
+  return h("div", null,
+    h(DtTitle, { title: "Admin Dashboard", sub: "Manage bus companies, approvals, payments and system settings.", right: h(DtSegment, { value: p.period, options: ["Daily", "Weekly", "Monthly"], onChange: p.setPeriod }) }),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14, marginBottom: 18 } },
+      h(DtKpi, { label: "Total Bus Companies", value: dtNum(p.stats.totalCompanies), sub: `Active: ${active} | Pending: ${p.pending.length}`, gradient: DT_KPI.blue, icon: "🚌" }),
+      h(DtKpi, { label: "Total Customers", value: dtNum(p.stats.totalCustomers), sub: "Registered users", gradient: DT_KPI.purple, icon: "👥" }),
+      h(DtKpi, { label: "Total Bookings", value: dtNum(p.stats.totalBookings), sub: `${dtNum(inPeriod.length)} paid tickets (${p.period.toLowerCase()})`, gradient: DT_KPI.green, icon: "🎟️" }),
+      h(DtKpi, { label: `Commission (${pctText(pct)}%) - ${p.period}`, value: dtMoney(commission), sub: "Daily Travel earnings", gradient: DT_KPI.amber, icon: "💰" }),
+      h(DtKpi, { label: `Registration fees - ${p.period}`, value: dtMoney(feeTotal), sub: "Confirmed fees", gradient: DT_KPI.navy, icon: "🧾" }),
+      h(DtKpi, { label: "Pending Approvals", value: dtNum(p.pending.length), sub: "Awaiting review", gradient: DT_KPI.red, icon: "⏳" })),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,420px),1fr))", gap: 16 } },
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Recent Bus Company Registrations"),
+        recent.length ? dtTableWrap(h("thead", null, h("tr", null, ["Company", "Submitted", "Status", "Action"].map((t) => h("th", { key: t, style: dtTh }, t)))),
+          h("tbody", null, recent.map((c) => h("tr", { key: c.id }, h("td", { style: dtTd }, h("div", { style: { display: "flex", alignItems: "center", gap: 10 } }, h(DtAvatar, { company: c, size: 34 }), h("b", null, c.company_name))), h("td", { style: dtTd }, dtDate(c.created_at)), h("td", { style: dtTd }, dtStatusPill(c)),
+            h("td", { style: dtTd }, c.approval_status === "pending" && c.status !== "rejected" ? h("div", { style: { display: "flex", gap: 6 } }, h("button", { style: dtBtnStyle(DT.green), onClick: () => p.approve(c) }, "Approve"), h("button", { style: dtBtnStyle(DT.red), onClick: () => p.reject(c.id) }, "Reject")) : h("button", { style: dtBtnStyle("#EEF2F8", DT.navy), onClick: () => p.go(c.status === "suspended" ? "Suspended" : "Approved Companies") }, "View"))))))
+          : h("p", { style: { color: DT.mute, fontSize: 13 } }, "No companies have registered yet.")),
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Revenue Overview (last 14 days)"),
+        h(DtLineChart, { labels: eb.map((b) => b.label), series: [{ name: "Commission", color: DT.blue, values: eb.map((b) => b.total) }, { name: "Gross payments", color: DT.green, values: eb.map((b) => b.gross) }] }),
+        h("div", { style: { display: "flex", gap: 16, fontSize: 12, color: DT.mute, marginTop: 6 } }, h("span", null, "● ", h("span", { style: { color: DT.blue } }, "Daily Travel earnings")), h("span", null, "● ", h("span", { style: { color: DT.green } }, "All ticket payments")))),
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Revenue Summary by Bus Company"), h(DtDonut, { slices, centerLabel: "Total", centerValue: dtMoney(paid.reduce((n, x) => n + (Number(x.amount ?? x.total) || 0), 0)) })),
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Quick Settings"),
+        h("div", { style: { display: "grid", gap: 10 } },
+          [["Commission added to each ticket", pctText(pct) + "%", "Pricing & Commission"], ["Default registration fee", p.settings && Number(p.settings.registration_fee_amount) ? dtMoney(p.settings.registration_fee_amount) : "No fee", "Pricing & Commission"], ["Payout accounts", [p.settings && p.settings.mtn_merchant_code ? "MTN" : null, p.settings && p.settings.airtel_merchant_code ? "Airtel" : null, p.settings && p.settings.bank_account_number ? "Bank" : null].filter(Boolean).join(" + ") || "Not set", "Payout Settings"]].map(([a, b, tab]) => h("div", { key: a, style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, background: "#F6F9FE", borderRadius: 12, padding: "10px 14px" } }, h("span", { style: { fontSize: 13 } }, a), h("span", { style: { display: "flex", alignItems: "center", gap: 10 } }, h("b", { style: { color: DT.navy } }, b), h("button", { style: dtBtnStyle("#E0EDFF", DT.blue), onClick: () => p.go(tab) }, "Edit")))))),
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Pending Approvals"),
+        pendingList.length ? pendingList.map((c) => h("div", { key: c.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #F0F4FA" } }, h(DtAvatar, { company: c, size: 36 }), h("div", { style: { flex: 1, minWidth: 0 } }, h("b", { style: { fontSize: 13 } }, c.company_name), h("div", { style: { fontSize: 11, color: DT.mute } }, dtDate(c.created_at))), h("button", { style: dtBtnStyle(DT.green), onClick: () => p.approve(c) }, "Approve"))) : h("p", { style: { color: DT.mute, fontSize: 13 } }, "Nothing waiting for approval.")),
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Top Bus Companies"),
+        ranked.length ? ranked.slice(0, 5).map((r, k) => h("div", { key: r.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #F0F4FA", fontSize: 13 } }, h("b", { style: { width: 20, color: DT_PALETTE[k] } }, k + 1), h("span", { style: { flex: 1 } }, nameOf(r.id)), h("span", { style: { color: DT.mute } }, dtNum(r.tickets) + " tickets"), h("b", null, dtMoney(r.revenue)))) : h("p", { style: { color: DT.mute, fontSize: 13 } }, "No paid tickets yet."))));
+}
+const pctText = dtPctText;
+
+function CompanyCard({ c, p, mode }) {
+  const h = L.createElement;
+  const eff = dtEffectiveFee(c, p.settings);
+  const regs = p.regPayments.filter((r) => r.company_id === c.id);
+  const reg = regs[0];
+  const confirmed = regs.some((r) => r.status === "confirmed");
+  const field = (label, value) => h("div", { key: label, style: { minWidth: 0 } }, h("div", { style: { fontSize: 10, color: "#9CA3AF", textTransform: "uppercase", letterSpacing: ".05em" } }, label), h("div", { style: { fontSize: 13, fontWeight: 600, overflowWrap: "anywhere" } }, value || "-"));
+  return h("div", { style: { ...dtCardStyle, borderLeft: `5px solid ${mode === "pending" ? DT.amber : mode === "suspended" ? DT.red : DT.green}` } },
+    h("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" } }, h(DtAvatar, { company: c, size: 60 }),
+      h("div", { style: { flex: 1, minWidth: 200 } }, h("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } }, h("h3", { style: { margin: 0, fontSize: 18, fontWeight: 800, color: DT.navy } }, c.company_name), dtStatusPill(c)),
+        h("div", { style: { fontSize: 12, color: DT.mute, marginTop: 2 } }, [c.trading_name, "Registered " + dtDate(c.created_at)].filter(Boolean).join(" • ")),
+        c.description ? h("p", { style: { fontSize: 13, margin: "6px 0 0", color: "#374151" } }, c.description) : null)),
+    Array.isArray(c.photos) && c.photos.length ? h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(110px,1fr))", gap: 8, marginTop: 12 } }, c.photos.slice(0, 6).map((u, k) => h("img", { key: k, src: u, alt: "", style: { width: "100%", height: 80, objectFit: "cover", borderRadius: 10, background: "#EEF2F8" } }))) : null,
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12, marginTop: 14 } },
+      field("Phone", c.phone), field("Email", c.email), field("Location", c.operating_location || c.address), field("Representative", c.rep_name), field("Rep phone", c.rep_phone), field("MTN MoMo code", c.mtn_code), field("Airtel code", c.airtel_code), field("Booking window", (c.booking_window_days || 5) + " days")),
+    h("div", { style: { marginTop: 14, background: "#F6F9FE", borderRadius: 14, padding: 14 } },
+      h("div", { style: { display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 8 } },
+        h("b", { style: { fontSize: 13, color: DT.navy } }, "Registration fee: ", eff.amount > 0 ? dtMoney(eff.amount) : "None"),
+        eff.amount > 0 ? (confirmed ? h(DtPill, { text: "Fee confirmed", bg: "#DCFCE7", fg: "#15803D" }) : reg ? h(DtPill, { text: reg.status === "rejected" ? "Payment rejected" : "Payment submitted", bg: reg.status === "rejected" ? "#FEE2E2" : "#FEF3C7", fg: reg.status === "rejected" ? "#B91C1C" : "#B45309" }) : h(DtPill, { text: "No payment yet", bg: "#F3F4F6", fg: "#4B5563" })) : h(DtPill, { text: "No fee due", bg: "#E0F2FE", fg: "#0369A1" })),
+      regs.map((r) => h("div", { key: r.id, style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", fontSize: 12, padding: "6px 0", borderTop: "1px dashed #D8E1EF" } },
+        h("span", null, dtMethodLabel(r.method), " • ref ", h("b", null, r.reference || "-"), " • ", dtMoney(r.amount), " • ", dtDate(r.created_at)),
+        h(DtPill, { text: r.status, bg: r.status === "confirmed" ? "#DCFCE7" : r.status === "rejected" ? "#FEE2E2" : "#FEF3C7", fg: r.status === "confirmed" ? "#15803D" : r.status === "rejected" ? "#B91C1C" : "#B45309" }),
+        r.status !== "confirmed" ? h("button", { style: dtBtnStyle(DT.green), onClick: () => p.setRegStatus(r, "confirmed") }, "Confirm payment") : null,
+        r.status === "submitted" ? h("button", { style: dtBtnStyle("#FEE2E2", "#B91C1C"), onClick: () => p.setRegStatus(r, "rejected") }, "Reject") : null)),
+      h("div", { style: { marginTop: 8 } }, h(DtFeeEditor, { company: c, settings: p.settings, onSave: p.saveCompanyFee }))),
+    h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 } },
+      mode === "pending" ? [h("button", { key: "a", style: dtBtnStyle(DT.green), onClick: () => p.approve(c) }, "Approve"), h("button", { key: "k", style: dtBtnStyle("#E0EDFF", DT.blue), onClick: () => p.requestCorrections(c.id) }, "Request Corrections"), h("button", { key: "r", style: dtBtnStyle(DT.red), onClick: () => p.reject(c.id) }, "Reject")] : null,
+      mode === "approved" ? [h("button", { key: "s", style: dtBtnStyle("#F59E0B"), onClick: () => p.suspend(c) }, "Suspend"), h("button", { key: "d", style: dtBtnStyle(DT.red), onClick: () => p.remove(c) }, "Delete company")] : null,
+      mode === "suspended" ? [h("button", { key: "u", style: dtBtnStyle(DT.green), onClick: () => p.unsuspend(c) }, "Unsuspend"), h("button", { key: "d", style: dtBtnStyle(DT.red), onClick: () => p.remove(c) }, "Delete company")] : null));
+}
+function CompanyList({ title, sub, list, mode, p, emptyText }) {
+  const h = L.createElement;
+  return h("div", null, h(DtTitle, { title: h("span", null, title, " ", h("span", { style: { fontSize: 13, background: "#E0EDFF", color: DT.blue, padding: "3px 12px", borderRadius: 999, verticalAlign: "middle" } }, list.length)), sub }),
+    h("div", { style: { display: "grid", gap: 14 } }, list.length ? list.map((c) => h(CompanyCard, { key: c.id, c, p, mode })) : h("div", { style: { ...dtCardStyle, textAlign: "center", color: DT.mute, padding: 40 } }, emptyText)));
+}
+function SuspendedPanel(p) {
+  const h = L.createElement;
+  return h("div", null, h(CompanyList, { title: "Suspended Companies", sub: "Suspended companies are hidden from customers until you unsuspend them (the change shows to customers immediately).", list: p.suspended, mode: "suspended", p, emptyText: "No suspended companies." }),
+    p.rejected.length ? h("div", { style: { marginTop: 26 } }, h(DtTitle, { title: "Rejected registrations", sub: "Re-open to review again, or delete permanently so they can register afresh." }), h("div", { style: { display: "grid", gap: 10 } }, p.rejected.map((c) => h("div", { key: c.id, style: { ...dtCardStyle, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" } }, h(DtAvatar, { company: c, size: 40 }), h("div", { style: { flex: 1, minWidth: 160 } }, h("b", null, c.company_name), h("div", { style: { fontSize: 12, color: DT.mute } }, c.email)), h("button", { style: dtBtnStyle("#E0EDFF", DT.blue), onClick: () => p.reopen(c.id) }, "Re-open as pending"), h("button", { style: dtBtnStyle(DT.red), onClick: () => p.remove(c) }, "Delete"))))) : null);
+}
+
+function TransactionsPanel(p) {
+  const h = L.createElement;
+  const bank = p.payments.filter((x) => x.payment_method === "bank" && String(x.status).toLowerCase() === "pending");
+  const nameOf = (id) => (p.companies.find((c) => c.id === id) || {}).company_name || (id ? String(id).slice(0, 8) : "-");
+  const commissionHeader = `Commission ${pctText(dtPct(p.settings))}%`;
+  const [busy, setBusy] = L.useState("");
+  const confirmBank = async (x) => {
+    if (!window.confirm(`Confirm that ${dtMoney(x.total)} was received in the bank account for this booking?`)) return;
+    setBusy(x.id);
+    const res = await dailyTravelSupabase.rpc("admin_confirm_bank_payment", { p_payment_id: x.id });
+    setBusy("");
+    if (res.error) return dailyTravelNotify("Could not confirm bank payment: " + res.error.message);
+    p.audit("bank_payment_confirmed", "payments", x.id, `Bank payment ${x.id} confirmed`);
+    if (window.dailyTravelReloadAdmin) window.dailyTravelReloadAdmin();
+  };
+  return h("div", null,
+    h(DtTitle, { title: "Transactions", sub: "MTN, Airtel and bank payments. Commission is added on top of each ticket price.", right: h("button", { style: dtBtnStyle(DT.navy), onClick: p.exportCsv }, "Export CSV") }),
+    bank.length ? h("div", { style: { ...dtCardStyle, marginBottom: 16, borderLeft: `5px solid ${DT.amber}` } }, h("h3", { style: { margin: "0 0 10px", fontSize: 15, fontWeight: 800, color: DT.navy } }, "Pending bank payments (" + bank.length + ")"),
+      bank.map((x) => h("div", { key: x.id, style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid #F0F4FA", fontSize: 13 } }, h("span", null, h("b", null, dtMoney(x.total)), " • ", nameOf(x.company_id), " • booking ", String(x.booking_id || "").slice(0, 8), " • ", dtDate(x.timestamp, true)), h("button", { disabled: busy === x.id, style: dtBtnStyle(DT.green), onClick: () => confirmBank(x) }, busy === x.id ? "Confirming..." : "Confirm payment received")))) : null,
+    h("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 } }, ["All", "MTN MoMo", "Airtel Money", "Bank"].map((f) => h("button", { key: f, onClick: () => p.setMethodFilter(f), style: { border: "1px solid " + (p.methodFilter === f ? DT.navy : DT.line), background: p.methodFilter === f ? DT.navy : "#fff", color: p.methodFilter === f ? "#fff" : DT.mute, borderRadius: 999, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" } }, f))),
+    h("div", { style: dtCardStyle }, p.filtered.length ? dtTableWrap(h("thead", null, h("tr", null, ["Ref", "Booking", "Company", "Fare", commissionHeader, "Total", "Method", "Settlement", "Status", "Time"].map((t) => h("th", { key: t, style: dtTh }, t)))),
+      h("tbody", null, p.filtered.map((x) => h("tr", { key: x.id }, h("td", { style: dtTd }, String(x.ref).slice(0, 12)), h("td", { style: dtTd }, String(x.booking_id || "").slice(0, 8)), h("td", { style: dtTd }, nameOf(x.company_id)), h("td", { style: dtTd }, dtNum(x.base_amount)), h("td", { style: dtTd }, dtNum(x.admin_amount)), h("td", { style: dtTd }, h("b", null, dtNum(x.total))), h("td", { style: dtTd }, h(DtPill, { text: x.method, bg: x.method === "MTN MoMo" ? "#FEF3C7" : x.method === "Airtel Money" ? "#FEE2E2" : "#E0EDFF", fg: x.method === "MTN MoMo" ? "#B45309" : x.method === "Airtel Money" ? "#B91C1C" : "#1D4ED8" })), h("td", { style: dtTd }, x.disbursement_status), h("td", { style: dtTd }, h(DtPill, { text: x.status, bg: x.status === "Successful" ? "#DCFCE7" : x.status === "failed" ? "#FEE2E2" : "#FEF3C7", fg: x.status === "Successful" ? "#15803D" : x.status === "failed" ? "#B91C1C" : "#B45309" })), h("td", { style: dtTd }, dtDate(x.timestamp, true)))))) : h("p", { style: { color: DT.mute, textAlign: "center", padding: 30 } }, "No transactions yet.")));
+}
+
+function EarningsPanel(p) {
+  const h = L.createElement;
+  const [period, setPeriod] = L.useState("Daily");
+  const rows = dtEarningsByBucket(dtBuckets(period), p.payments, p.regPayments);
+  const chartRows = rows.slice(period === "Daily" ? -14 : -12);
+  const all = (key) => dtEarningsByBucket([{ start: new Date(2000, 0, 1), end: new Date(2100, 0, 1), label: "all" }], p.payments, p.regPayments)[0][key];
+  const todayStart = dtSod(new Date());
+  const sumFrom = (start) => dtEarningsByBucket([{ start, end: new Date(2100, 0, 1), label: "x" }], p.payments, p.regPayments)[0].total;
+  const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+  const weekStart = dtAddDays(todayStart, -((todayStart.getDay() + 6) % 7));
+  const totals = rows.reduce((n, r) => ({ tickets: n.tickets + r.tickets, commission: n.commission + r.commission, fees: n.fees + r.fees, total: n.total + r.total }), { tickets: 0, commission: 0, fees: 0, total: 0 });
+  return h("div", null,
+    h(DtTitle, { title: "Daily Travel Earnings", sub: `Commission (${pctText(dtPct(p.settings))}% added to ticket prices) plus confirmed registration fees.`, right: h(DtSegment, { value: period, options: ["Daily", "Weekly", "Monthly"], onChange: setPeriod }) }),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14, marginBottom: 18 } },
+      h(DtKpi, { label: "Today", value: dtMoney(sumFrom(todayStart)), gradient: DT_KPI.blue, icon: "☀️" }),
+      h(DtKpi, { label: "This week", value: dtMoney(sumFrom(weekStart)), gradient: DT_KPI.green, icon: "📅" }),
+      h(DtKpi, { label: "This month", value: dtMoney(sumFrom(monthStart)), gradient: DT_KPI.purple, icon: "🗓️" }),
+      h(DtKpi, { label: "All time", value: dtMoney(all("total")), sub: `${dtNum(all("tickets"))} tickets • fees ${dtMoney(all("fees"))}`, gradient: DT_KPI.amber, icon: "🏆" })),
+    h("div", { style: { ...dtCardStyle, marginBottom: 16 } }, h("h3", { style: { margin: "0 0 10px", fontSize: 15, fontWeight: 800, color: DT.navy } }, `${period} earnings`), h(DtBarChart, { labels: chartRows.map((r) => r.short || r.label), values: chartRows.map((r) => r.total) })),
+    h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 10px", fontSize: 15, fontWeight: 800, color: DT.navy } }, `${period} records`),
+      dtTableWrap(h("thead", null, h("tr", null, ["Period", "Tickets", "Commission", "Registration fees", "Total earned"].map((t) => h("th", { key: t, style: { ...dtTh, textAlign: t === "Period" ? "left" : "right" } }, t)))),
+        h("tbody", null, [...rows].reverse().map((r) => h("tr", { key: r.label }, h("td", { style: dtTd }, r.label), h("td", { style: { ...dtTd, textAlign: "right" } }, dtNum(r.tickets)), h("td", { style: { ...dtTd, textAlign: "right" } }, dtNum(r.commission)), h("td", { style: { ...dtTd, textAlign: "right" } }, dtNum(r.fees)), h("td", { style: { ...dtTd, textAlign: "right", fontWeight: 800 } }, dtMoney(r.total))))),
+        h("tfoot", null, h("tr", null, h("td", { style: { ...dtTd, fontWeight: 800 } }, "Total shown"), h("td", { style: { ...dtTd, textAlign: "right", fontWeight: 800 } }, dtNum(totals.tickets)), h("td", { style: { ...dtTd, textAlign: "right", fontWeight: 800 } }, dtNum(totals.commission)), h("td", { style: { ...dtTd, textAlign: "right", fontWeight: 800 } }, dtNum(totals.fees)), h("td", { style: { ...dtTd, textAlign: "right", fontWeight: 800 } }, dtMoney(totals.total)))))));
+}
+
+function NotificationsPanel(p) {
+  const h = L.createElement;
+  const [tab, setTab] = L.useState("Inbox");
+  const [audience, setAudience] = L.useState("company_broadcast");
+  const [companyId, setCompanyId] = L.useState("");
+  const [title, setTitle] = L.useState("");
+  const [message, setMessage] = L.useState("");
+  const [busy, setBusy] = L.useState(false);
+  const [ok, setOk] = L.useState("");
+  const approvedAll = p.companies.filter((c) => c.status !== "deleted");
+  const kindStyle = { registration: ["🏢", "#E0EDFF"], payment: ["💳", "#DCFCE7"], ticket_sale: ["🎟️", "#DCFCE7"], message: ["✉️", "#F3E8FF"] };
+  const send = async () => {
+    setOk("");
+    if (!title.trim() || !message.trim()) return dailyTravelNotify("Enter a title and a message");
+    if (audience === "company" && !companyId) return dailyTravelNotify("Choose the company to notify");
+    setBusy(true);
+    const res = await dailyTravelSupabase.rpc("send_notification", { p_audience: audience, p_title: title.trim(), p_message: message.trim(), p_user_id: null, p_company_id: audience === "company" ? companyId : null });
+    setBusy(false);
+    if (res.error) return dailyTravelNotify("Could not send notification: " + res.error.message);
+    p.audit("notification_sent", "notifications", String(res.data || ""), `${audience}: ${title.trim()}`);
+    setOk("Notification sent"); setTitle(""); setMessage(""); p.live.reloadNotifications();
+    setTimeout(() => setOk(""), 3000);
+  };
+  const audLabel = (n) => (n.audience_type === "company_broadcast" ? "All companies" : n.audience_type === "customer_broadcast" ? "All customers" : n.audience_type === "company" ? "Company: " + ((p.companies.find((c) => c.id === n.company_id) || {}).company_name || "-") : n.audience_type);
+  return h("div", null,
+    h(DtTitle, { title: "Notifications", sub: "Registrations arrive here live. Send messages to bus companies or customers.", right: h(DtSegment, { value: tab, options: ["Inbox", "Compose", "Sent"], onChange: setTab }) }),
+    tab === "Inbox" ? h("div", { style: dtCardStyle },
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, h("b", { style: { color: DT.navy } }, `${p.live.unread} unread`), p.live.unread ? h("button", { style: dtBtnStyle("#E0EDFF", DT.blue), onClick: p.live.markAllRead }, "Mark all read") : null),
+      p.live.notifications.length ? p.live.notifications.map((n) => { const k = kindStyle[n.kind] || ["🔔", "#EEF2F8"]; return h("div", { key: n.id, onClick: () => !n.read && p.live.markRead(n.id), style: { display: "flex", gap: 12, padding: "12px 6px", borderTop: "1px solid #F0F4FA", cursor: n.read ? "default" : "pointer", background: n.read ? "transparent" : "#F6FAFF", borderRadius: 10 } },
+        h("div", { style: { width: 40, height: 40, borderRadius: 12, background: k[1], display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flex: "none" } }, k[0]),
+        h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontWeight: n.read ? 600 : 800, fontSize: 14 } }, n.title || "Notification", !n.read ? h("span", { style: { display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: DT.blue, marginLeft: 8 } }) : null), h("div", { style: { fontSize: 13, color: "#374151", overflowWrap: "anywhere" } }, n.message), h("div", { style: { fontSize: 11, color: DT.mute, marginTop: 2 } }, dtDate(n.created_at, true))),
+        n.kind === "registration" ? h("button", { style: dtBtnStyle("#E0EDFF", DT.blue), onClick: (e) => { e.stopPropagation(); p.live.markRead(n.id); p.go("Pending Companies"); } }, "Review") : null); }) : h("p", { style: { color: DT.mute, textAlign: "center", padding: 30 } }, "No notifications yet.")) : null,
+    tab === "Compose" ? h("div", { style: { ...dtCardStyle, maxWidth: 680 } },
+      h("div", { style: { display: "grid", gap: 14 } },
+        h("label", { style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, "Send to", h("select", { value: audience, onChange: (e) => setAudience(e.target.value), style: { ...dtInputStyle, marginTop: 6 } }, h("option", { value: "company_broadcast" }, "All bus companies"), h("option", { value: "company" }, "A specific bus company"), h("option", { value: "customer_broadcast" }, "All customers"))),
+        audience === "company" ? h("label", { style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, "Company", h("select", { value: companyId, onChange: (e) => setCompanyId(e.target.value), style: { ...dtInputStyle, marginTop: 6 } }, h("option", { value: "" }, "Choose a company..."), approvedAll.map((c) => h("option", { key: c.id, value: c.id }, c.company_name)))) : null,
+        h("label", { style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, "Title", h("input", { value: title, onChange: (e) => setTitle(e.target.value), maxLength: 120, style: { ...dtInputStyle, marginTop: 6 } })),
+        h("label", { style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, "Message", h("textarea", { value: message, onChange: (e) => setMessage(e.target.value), rows: 5, maxLength: 1000, style: { ...dtInputStyle, height: "auto", padding: 12, marginTop: 6, resize: "vertical", fontFamily: "inherit" } })),
+        h("div", { style: { display: "flex", gap: 12, alignItems: "center" } }, h("button", { disabled: busy, style: dtBtnStyle(DT.blue), onClick: send }, busy ? "Sending..." : "Send notification"), ok ? h("span", { style: { color: DT.green, fontWeight: 700, fontSize: 13 } }, "✓ " + ok) : null))) : null,
+    tab === "Sent" ? h("div", { style: dtCardStyle }, p.live.sent.length ? p.live.sent.map((n) => h("div", { key: n.id, style: { padding: "10px 0", borderTop: "1px solid #F0F4FA" } }, h("div", { style: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" } }, h("b", { style: { fontSize: 14 } }, n.title), h(DtPill, { text: audLabel(n), bg: "#E0EDFF", fg: DT.blue })), h("div", { style: { fontSize: 13, color: "#374151" } }, n.message), h("div", { style: { fontSize: 11, color: DT.mute } }, dtDate(n.created_at, true)))) : h("p", { style: { color: DT.mute, textAlign: "center", padding: 30 } }, "Nothing sent yet.")) : null);
+}
+
+function PayoutPanel(p) {
+  const h = L.createElement;
+  const s = p.settings || {};
+  const [f, setF] = L.useState({ mtn: "", airtel: "", bank_name: "", bank_account_name: "", bank_account_number: "" });
+  L.useEffect(() => { setF({ mtn: s.mtn_merchant_code || "", airtel: s.airtel_merchant_code || "", bank_name: s.bank_name || "", bank_account_name: s.bank_account_name || "", bank_account_number: s.bank_account_number || "" }); }, [s.id, s.mtn_merchant_code, s.airtel_merchant_code, s.bank_name, s.bank_account_name, s.bank_account_number]);
+  const [msg, setMsg] = L.useState("");
+  const save = async () => {
+    if (!f.mtn.trim() && !f.airtel.trim() && !f.bank_account_number.trim()) return dailyTravelNotify("Enter at least one account to receive payments");
+    const patch = { mtn_merchant_code: f.mtn.trim(), airtel_merchant_code: f.airtel.trim(), bank_name: f.bank_name.trim() || null, bank_account_name: f.bank_account_name.trim() || null, bank_account_number: f.bank_account_number.trim() || null };
+    const res = s.id ? await dailyTravelSupabase.from("admin_settings").update(patch).eq("id", s.id).select() : await dailyTravelSupabase.from("admin_settings").insert(patch).select();
+    if (!dailyTravelCheck("Payout settings", res)) return;
+    p.setMtn(patch.mtn_merchant_code); p.setAirtel(patch.airtel_merchant_code);
+    p.live.setSettings((cur) => ({ ...(cur || {}), ...patch, id: (res.data && res.data[0] && res.data[0].id) || (cur && cur.id) }));
+    p.audit("payout_code_change", "admin_settings", s.id || "settings", `MTN:${patch.mtn_merchant_code} Airtel:${patch.airtel_merchant_code} Bank:${patch.bank_account_number ? "set" : "none"}`);
+    setMsg("Payout accounts saved"); setTimeout(() => setMsg(""), 3000);
+  };
+  const box = (title, gradient, icon, children) => h("div", { style: { ...dtCardStyle, padding: 0, overflow: "hidden" } }, h("div", { style: { background: gradient, color: "#fff", padding: "16px 20px", display: "flex", alignItems: "center", gap: 10, fontWeight: 800 } }, h("span", { style: { fontSize: 22 } }, icon), title), h("div", { style: { padding: 20, display: "grid", gap: 12 } }, children));
+  const inp = (label, key, ph) => h("label", { key, style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, label, h("input", { value: f[key], placeholder: ph, onChange: (e) => setF({ ...f, [key]: e.target.value }), style: { ...dtInputStyle, marginTop: 6 } }));
+  return h("div", null, h(DtTitle, { title: "Payout Settings", sub: "Daily Travel's own accounts. The commission and registration fees are paid into these accounts." }),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,300px),1fr))", gap: 16 } },
+      box("MTN MoMo merchant code", "linear-gradient(135deg,#F59E0B,#FDB515)", "📱", inp("MoMo merchant code", "mtn", "e.g. 123456")),
+      box("Airtel Money merchant code", "linear-gradient(135deg,#DC2626,#FB7185)", "📶", inp("Airtel merchant code", "airtel", "e.g. 654321")),
+      box("Bank account (optional)", "linear-gradient(135deg,#0B2A5B,#1D4ED8)", "🏦", [inp("Bank name", "bank_name", "e.g. Stanbic Bank"), inp("Account name", "bank_account_name", "Daily Travel Ltd"), inp("Account number", "bank_account_number", "Account number")])),
+    h("div", { style: { display: "flex", gap: 14, alignItems: "center", marginTop: 18, flexWrap: "wrap" } }, h("button", { style: dtBtnStyle(DT.blue), onClick: save }, "Save payout accounts"), msg ? h("span", { style: { color: DT.green, fontWeight: 700 } }, "✓ " + msg) : null),
+    h("div", { style: { ...dtCardStyle, marginTop: 18, background: "#F6FAFF" } }, h("b", { style: { color: DT.navy } }, "How it works"), h("ul", { style: { margin: "8px 0 0 18px", fontSize: 13, color: "#374151", lineHeight: 1.7 } }, h("li", null, "Each bus company registers its own MTN / Airtel merchant code; its share of a ticket is paid to that code."), h("li", null, "Your commission and registration fees go to the accounts above."), h("li", null, "Customers who choose bank payment see the bank details here and you confirm receipt in Transactions."))));
+}
+
+function PricingPanel(p) {
+  const h = L.createElement;
+  const s = p.settings || {};
+  const [pct, setPct] = L.useState("2");
+  const [fee, setFee] = L.useState("0");
+  const [msg, setMsg] = L.useState("");
+  L.useEffect(() => { setPct(String(dtPct(s))); setFee(String(Number(s.registration_fee_amount) || 0)); }, [s.id, s.commission_percent, s.registration_fee_amount]);
+  const save = async () => {
+    const pctNum = Number(pct), feeNum = Math.max(0, Math.round(Number(fee) || 0));
+    if (!Number.isFinite(pctNum) || pctNum < 0 || pctNum > 50) return dailyTravelNotify("Commission must be between 0 and 50 percent");
+    const patch = { commission_percent: pctNum, registration_fee_amount: feeNum };
+    const res = s.id ? await dailyTravelSupabase.from("admin_settings").update(patch).eq("id", s.id).select() : await dailyTravelSupabase.from("admin_settings").insert(patch).select();
+    if (!dailyTravelCheck("Pricing settings", res)) return;
+    p.live.setSettings((cur) => ({ ...(cur || {}), ...patch, id: (res.data && res.data[0] && res.data[0].id) || (cur && cur.id) }));
+    p.audit("pricing_change", "admin_settings", s.id || "settings", `Commission ${pctNum}% • default registration fee ${feeNum}`);
+    setMsg("Pricing saved"); setTimeout(() => setMsg(""), 3000);
+  };
+  const example = 40000, exCommission = Math.round((example * (Number(pct) || 0)) / 100);
+  return h("div", null, h(DtTitle, { title: "Pricing & Commission", sub: "Your commission is added on top of the bus company's ticket price, so bus companies always receive their full price." }),
+    h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: 16 } },
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", color: DT.navy, fontSize: 15, fontWeight: 800 } }, "Ticket commission"),
+        h("label", { style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, "Commission (%)", h("input", { type: "number", min: 0, max: 50, step: 0.1, value: pct, onChange: (e) => setPct(e.target.value), style: { ...dtInputStyle, marginTop: 6 } })),
+        h("div", { style: { marginTop: 14, background: "#F6F9FE", borderRadius: 14, padding: 14, fontSize: 13, lineHeight: 1.8 } }, h("b", { style: { color: DT.navy } }, "Example"), h("div", null, "Bus company ticket price: ", h("b", null, dtMoney(example))), h("div", null, "Your commission (", pctText(Number(pct) || 0), "%): ", h("b", null, dtMoney(exCommission))), h("div", null, "Customer pays: ", h("b", { style: { color: DT.blue } }, dtMoney(example + exCommission)), " (one final price, no breakdown shown)"), h("div", { style: { color: DT.mute, fontSize: 12 } }, "MTN / Airtel charge their own fee at the payment prompt."))),
+      h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", color: DT.navy, fontSize: 15, fontWeight: 800 } }, "Default registration fee"),
+        h("label", { style: { fontSize: 12, fontWeight: 700, color: DT.mute } }, "Fee for new bus companies (UGX, 0 = no fee)", h("input", { type: "number", min: 0, value: fee, onChange: (e) => setFee(e.target.value), style: { ...dtInputStyle, marginTop: 6 } })),
+        h("p", { style: { fontSize: 12, color: DT.mute, lineHeight: 1.6 } }, "Companies pay this to your MTN / Airtel account when they register. You can change it any time, remove it (0), or override it per company below."))),
+    h("div", { style: { display: "flex", gap: 14, alignItems: "center", margin: "16px 0", flexWrap: "wrap" } }, h("button", { style: dtBtnStyle(DT.blue), onClick: save }, "Save pricing"), msg ? h("span", { style: { color: DT.green, fontWeight: 700 } }, "✓ " + msg) : null),
+    h("div", { style: dtCardStyle }, h("h3", { style: { margin: "0 0 12px", color: DT.navy, fontSize: 15, fontWeight: 800 } }, "Registration fee per company"),
+      p.companies.length ? p.companies.map((c) => h("div", { key: c.id, style: { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", padding: "10px 0", borderTop: "1px solid #F0F4FA" } }, h("div", { style: { display: "flex", gap: 10, alignItems: "center", minWidth: 200, flex: "1 1 200px" } }, h(DtAvatar, { company: c, size: 34 }), h("div", null, h("b", { style: { fontSize: 13 } }, c.company_name), h("div", null, dtStatusPill(c)))), h(DtFeeEditor, { company: c, settings: s, onSave: p.saveCompanyFee }))) : h("p", { style: { color: DT.mute, fontSize: 13 } }, "No companies yet.")));
+}
+
+function AdminPanels(p) {
+  const h = L.createElement;
+  const map = { Overview: OverviewPanel, "Pending Companies": (q) => h(CompanyList, { title: "Pending Companies", sub: "Review new registrations. Approving moves a company to Approved Companies immediately.", list: q.pending, mode: "pending", p: q, emptyText: "No pending companies" }), "Approved Companies": (q) => h(CompanyList, { title: "Approved Companies", sub: "Suspend to hide a company from customers, or delete it permanently.", list: q.approved, mode: "approved", p: q, emptyText: "No approved companies yet" }), Suspended: SuspendedPanel, Transactions: TransactionsPanel, Earnings: EarningsPanel, Notifications: NotificationsPanel, "Payout Settings": PayoutPanel, "Pricing & Commission": PricingPanel };
+  const Panel = map[p.tab];
+  return Panel ? h("div", { className: "dt-panel" }, h(Panel, p)) : null;
+}
+// ---- end admin panels ----
 function qi() {
   let [A, e] = L.useState(!1),
     [n, t] = L.useState(""),
@@ -11393,6 +11851,7 @@ function qi() {
     [Es, Hs] = L.useState(!1),
     [Ss, Us] = L.useState(!1),
     [Ke, Ge] = L.useState(""),
+    dtLive = useAdminLive(A),
     Ae = L.useMemo(
       () =>
         x.filter(
@@ -11401,10 +11860,11 @@ function qi() {
       [x],
     ),
     Rt = L.useMemo(
-      () => x.filter((f) => f.approval_status === "approved"),
+      () => x.filter((f) => f.approval_status === "approved" && f.status !== "suspended" && f.status !== "deleted"),
       [x],
     ),
     Xt = L.useMemo(() => x.filter((f) => f.status === "suspended"), [x]),
+    dtRejected = L.useMemo(() => x.filter((f) => f.approval_status === "rejected" && f.status !== "deleted"), [x]),
     ki = L.useMemo(() => x.filter((f) => f.status === "deleted"), [x]),
     vA = L.useMemo(() => {
       let k = x.filter((Ne) => Ne.status !== "deleted").length,
@@ -11505,13 +11965,13 @@ function qi() {
       d((k) =>
         k.map((Z) =>
           Z.id === f
-            ? { ...Z, approval_status: "pending", status: "deleted" }
+            ? { ...Z, approval_status: "rejected", status: "rejected" }
             : Z,
         ),
       );
       const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
-        .update({ status: "deleted", rejection_reason: "Rejected by admin" })
+        .update({ status: "rejected", approval_status: "rejected", rejection_reason: "Rejected by admin" })
         .eq("id", f).select();
       dailyTravelCheck("Company rejection", { data: updated, error });
       ee("company_rejected", "bus_companies", f, `Rejected company ${f}`);
@@ -11528,13 +11988,13 @@ function qi() {
       d((k) =>
         k.map((Z) =>
           Z.id === f
-            ? { ...Z, status: "suspended", approval_status: "suspended" }
+            ? { ...Z, status: "suspended" }
             : Z,
         ),
       );
       const { data: updated, error } = await dailyTravelSupabase
         .from("bus_companies")
-        .update({ status: "suspended", approval_status: "suspended" })
+        .update({ status: "suspended" })
         .eq("id", f).select();
       dailyTravelCheck("Company suspension", { data: updated, error });
       ee("company_suspended", "bus_companies", f, `Suspended ${f}`);
@@ -11555,13 +12015,41 @@ function qi() {
       ee("company_unsuspended", "bus_companies", f, `Unsuspended ${f}`);
     },
     Ds = async (f) => {
-      d((k) => k.map((Z) => (Z.id === f ? { ...Z, status: "deleted" } : Z)));
-      const { data: updated, error } = await dailyTravelSupabase
-        .from("bus_companies")
-        .update({ status: "deleted" })
-        .eq("id", f).select();
-      dailyTravelCheck("Company deletion", { data: updated, error });
-      ee("company_deleted", "bus_companies", f, `Deleted ${f} - ledger kept`);
+      const company = x.find((Z) => Z.id === f);
+      if (!window.confirm(`Delete ${company?.company_name || "this company"} permanently? It disappears completely (login included) and can register again. Past bookings and payments stay in the records.`)) return;
+      try {
+        await dtEdge("delete-account", { confirm: "DELETE", company_id: f });
+        d((k) => k.filter((Z) => Z.id !== f));
+        ee("company_deleted", "bus_companies", f, `Deleted ${company?.company_name || f}`);
+        dailyTravelNotify("Company deleted");
+      } catch (error) {
+        dailyTravelNotify("Could not delete company: " + (error?.message || error));
+      }
+    },
+    dtReopen = async (f) => {
+      d((k) => k.map((Z) => (Z.id === f ? { ...Z, approval_status: "pending", status: "pending" } : Z)));
+      const r = await dailyTravelSupabase.from("bus_companies").update({ approval_status: "pending", status: "pending" }).eq("id", f).select();
+      dailyTravelCheck("Re-open registration", r);
+      ee("company_reopened", "bus_companies", f, `Re-opened ${f}`);
+    },
+    dtRequestCorrections = async (f) => {
+      const r = await dailyTravelSupabase.rpc("send_notification", { p_audience: "company", p_title: "Corrections needed", p_message: "Please review your registration details and contact Daily Travel support.", p_user_id: null, p_company_id: f });
+      if (r.error) return dailyTravelNotify("Could not send request: " + r.error.message);
+      ee("correction_requested", "bus_companies", f, `Requested corrections for ${f}`);
+      dailyTravelNotify("Correction request sent to the company");
+    },
+    dtSetRegStatus = async (r, status) => {
+      const res = await dailyTravelSupabase.from("registration_payments").update({ status, confirmed_at: status === "confirmed" ? new Date().toISOString() : null }).eq("id", r.id).select();
+      if (!dailyTravelCheck("Registration fee", res)) return;
+      ee("registration_fee_" + status, "registration_payments", r.id, `Registration fee ${status}`);
+      dtLive.reloadReg();
+    },
+    dtSaveCompanyFee = async (company, amount) => {
+      const res = await dailyTravelSupabase.rpc("set_company_registration_fee", { p_company_id: company.id, p_amount: amount });
+      if (res.error) return dailyTravelNotify("Could not save fee: " + res.error.message);
+      d((k) => k.map((Z) => (Z.id === company.id ? { ...Z, registration_fee_amount: amount } : Z)));
+      ee("registration_fee_set", "bus_companies", company.id, amount === null ? "Default fee" : `Fee ${amount}`);
+      dailyTravelNotify("Registration fee saved");
     },
     bs = async () => {
       if (!X || !W) return;
@@ -11747,7 +12235,9 @@ function qi() {
               method:
                 payment.payment_method === "airtel_money"
                   ? "Airtel Money"
-                  : "MTN MoMo",
+                  : payment.payment_method === "bank"
+                    ? "Bank"
+                    : "MTN MoMo",
               company_code: "",
               admin_code: "",
               disbursement_status: payment.settlement_status || "Pending",
@@ -11822,7 +12312,7 @@ function qi() {
       admin_amount: payment.admin_amount || 0,
       total: payment.amount || 0,
       method:
-        payment.payment_method === "airtel_money" ? "Airtel Money" : "MTN MoMo",
+        payment.payment_method === "airtel_money" ? "Airtel Money" : payment.payment_method === "bank" ? "Bank" : "MTN MoMo",
       company_code: "",
       admin_code: "",
       disbursement_status: payment.settlement_status || "Pending",
@@ -12178,6 +12668,7 @@ function qi() {
               { label: "Transactions", icon: "receipt" },
               { label: "Earnings", icon: "chart" },
               { label: "Notifications", icon: "bell" },
+              { label: "Pricing & Commission", icon: "wallet" },
               { label: "Payout Settings", icon: "wallet" },
               { label: "Support Settings", icon: "headset" },
               { label: "Audit Logs", icon: "list" },
@@ -12570,7 +13061,15 @@ function qi() {
         children: c("div", {
           className: "p-4 md:p-6 max-w-[1200px] mx-auto w-full",
           children: [
-            q === "Overview" &&
+            i(AdminPanels, {
+              tab: q, live: dtLive, settings: dtLive.settings, regPayments: dtLive.regPayments,
+              payments: s, companies: x, pending: Ae, approved: Rt, suspended: Xt, rejected: dtRejected, stats: vA,
+              period: g, setPeriod: HA, methodFilter: Je, setMethodFilter: Ps, filtered: Oi, audit: ee, go: N,
+              approve: (c) => Ys(c.id), reject: (id) => Js(id), suspend: (c) => Gs(c.id), unsuspend: (c) => js(c.id),
+              reopen: (id) => dtReopen(id), remove: (c) => Ds(c.id), requestCorrections: (id) => dtRequestCorrections(id),
+              setRegStatus: dtSetRegStatus, saveCompanyFee: dtSaveCompanyFee, exportCsv: Cs, setMtn: w, setAirtel: D,
+            }),
+            false && q === "Overview" &&
               c("div", {
                 className: "space-y-6",
                 children: [
@@ -13013,7 +13512,7 @@ function qi() {
                   }),
                 ],
               }),
-            q === "Pending Companies" &&
+            false && q === "Pending Companies" &&
               c("div", {
                 className: "space-y-4",
                 children: [
@@ -13275,7 +13774,7 @@ function qi() {
                   ),
                 ],
               }),
-            q === "Approved Companies" &&
+            false && q === "Approved Companies" &&
               c("div", {
                 className: "space-y-4",
                 children: [
@@ -13363,7 +13862,7 @@ function qi() {
                   ),
                 ],
               }),
-            q === "Suspended" &&
+            false && q === "Suspended" &&
               c("div", {
                 className: "space-y-4",
                 children: [
@@ -13445,7 +13944,7 @@ function qi() {
                     }),
                 ],
               }),
-            q === "Transactions" &&
+            false && q === "Transactions" &&
               c("div", {
                 className: "space-y-4",
                 children: [
@@ -13624,7 +14123,7 @@ function qi() {
                   }),
                 ],
               }),
-            q === "Earnings" &&
+            false && q === "Earnings" &&
               c("div", {
                 className: "space-y-6",
                 children: [
@@ -13806,7 +14305,7 @@ function qi() {
                   }),
                 ],
               }),
-            q === "Notifications" &&
+            false && q === "Notifications" &&
               c("div", {
                 className: "space-y-4",
                 children: [
@@ -13959,7 +14458,7 @@ function qi() {
                       }),
                 ],
               }),
-            q === "Payout Settings" &&
+            false && q === "Payout Settings" &&
               c("div", {
                 className: "space-y-4 max-w-[640px]",
                 children: [

@@ -1923,6 +1923,9 @@ const dailyTravelSupabase = createSupabaseClient(
 // Expose the publishable client for the bundled app and manual integrations.
 window.dailyTravelSupabase = dailyTravelSupabase;
 
+window.dailyTravelPricing = window.dailyTravelPricing || { commission_percent: 2 };
+const dtPct = () => Number(window.dailyTravelPricing?.commission_percent ?? 2);
+const dtFinal = (fare, n = 1) => { const base = Number(fare || 0) * n; return base + Math.round((base * dtPct()) / 100); };
 const dailyTravelIsUuid = (value) =>
   typeof value === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -1958,12 +1961,21 @@ const dailyTravelNotify = (message) => {
 };
 window.dailyTravelNotify = dailyTravelNotify;
 const dailyTravelFunctionsBase = `${DAILY_TRAVEL_SUPABASE_URL}/functions/v1`;
+const DAILY_TRAVEL_FUNCTION_NAMES = {
+  "payment-initiate": "Payment-Initiate",
+  "payment-status": "Daily-Travel-Payment-Status",
+  "payment-webhook": "Daily-Travel-Payment-Webhook",
+  "receipt-download": "Receipt-download",
+  "delete-account": "Daily-Travel-Delete-Account",
+  "recover-password": "Daily-Travel-Recover-Password",
+};
+const dtFn = (slug) => DAILY_TRAVEL_FUNCTION_NAMES[slug] || slug;
 const dailyTravelInvokeFunction = async (slug, body) => {
   const {
     data: { session },
   } = await dailyTravelSupabase.auth.getSession();
   if (!session) throw new Error("Please sign in before continuing");
-  const response = await fetch(`${dailyTravelFunctionsBase}/${slug}`, {
+  const response = await fetch(`${dailyTravelFunctionsBase}/${dtFn(slug)}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${session.access_token}`,
@@ -1983,7 +1995,7 @@ const dailyTravelDownloadReceipt = async (booking) => {
     } = await dailyTravelSupabase.auth.getSession();
     if (!session) throw new Error("Please sign in before downloading a receipt");
     const response = await fetch(
-      `${dailyTravelFunctionsBase}/receipt-download?booking_id=${encodeURIComponent(booking.id)}`,
+      `${dailyTravelFunctionsBase}/${dtFn("receipt-download")}?booking_id=${encodeURIComponent(booking.id)}`,
       {
         headers: {
           Authorization: `Bearer ${session.access_token}`,
@@ -11550,74 +11562,94 @@ var se = m0,
   f = sc,
   c = sc;
 // ---- Company dashboard modules (live Supabase data) ----
-const dtFmt = (v) => {
-  if (!v) return "";
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString("en-UG", { dateStyle: "medium", timeStyle: "short" });
-};
+const dtFmt = (v) => { try { return new Date(v).toLocaleString("en-UG", { dateStyle: "medium", timeStyle: "short" }); } catch { return String(v || ""); } };
 const dtMoney = (n) => "UGX " + Number(n || 0).toLocaleString("en-UG");
 const dtSeatList = (v) => (Array.isArray(v) ? v : []).join(", ");
+const DT = { navy: "#0B2A5B", blue: "#0798E3", teal: "#62C9C5", amber: "#FDB515", green: "#16A34A", red: "#C62828", violet: "#7C3AED", ink: "#202124" };
 const dtRowStyle = { display: "flex", justifyContent: "space-between", gap: 12, padding: "10px 0", borderBottom: "1px solid #F0F0F0", fontSize: 13, flexWrap: "wrap", alignItems: "center" };
-const dtCard = { background: "#fff", border: "1px solid #EEE", borderRadius: 16, padding: 20, marginBottom: 16 };
-const dtInput = { border: "1px solid #DDD", borderRadius: 10, padding: "8px 10px", fontSize: 13, minWidth: 0, width: "100%", height: 38, boxSizing: "border-box", background: "#fff", color: "#202124", flex: "none" };
-const dtBtn = (bg, fg) => ({ background: bg || "#0798E3", color: fg || "#fff", border: 0, borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
+const dtCard = { background: "#fff", border: "1px solid #E6EEF7", borderRadius: 18, padding: 20, marginBottom: 16, boxShadow: "0 4px 18px rgba(11,42,91,.06)" };
+const dtInput = { border: "1px solid #D6DEE8", borderRadius: 10, padding: "8px 10px", fontSize: 13, minWidth: 0, width: "100%", height: 38, boxSizing: "border-box", background: "#fff", color: "#202124", flex: "none" };
+const dtBtn = (bg, fg) => ({ background: bg || "linear-gradient(135deg,#0798E3,#62C9C5)", color: fg || "#fff", border: 0, borderRadius: 10, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" });
+const dtDay = (d) => new Date(d).toLocaleDateString("en-CA", { timeZone: "Africa/Kampala" });
+const dtWeekKey = (d) => { const x = new Date(dtDay(d) + "T00:00:00"); const day = (x.getDay() + 6) % 7; x.setDate(x.getDate() - day); return x.toLocaleDateString("en-CA"); };
+const dtMonthKey = (d) => dtDay(d).slice(0, 7);
+function DtBars({ rows, color }) {
+  const h = M.createElement;
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  const w = 520, ht = 150, bw = Math.max(8, Math.min(40, (w - 20) / Math.max(rows.length, 1) - 6));
+  return h("svg", { viewBox: `0 0 ${w} ${ht + 34}`, style: { width: "100%", height: "auto" }, role: "img", "aria-label": "Earnings chart" },
+    rows.map((r, i) => {
+      const bh = Math.round((r.value / max) * ht);
+      const x = 10 + i * ((w - 20) / Math.max(rows.length, 1)) + 3;
+      return h("g", { key: r.label },
+        h("rect", { x, y: ht - bh + 4, width: bw, height: bh, rx: 6, fill: color || DT.blue }),
+        h("text", { x: x + bw / 2, y: ht + 20, fontSize: 9, textAnchor: "middle", fill: "#667" }, r.label),
+        r.value ? h("text", { x: x + bw / 2, y: ht - bh, fontSize: 9, textAnchor: "middle", fill: DT.navy }, r.value >= 1000 ? Math.round(r.value / 1000) + "k" : r.value) : null);
+    }));
+}
+const dtUploadImage = async (sb, bucket, uid, file) => {
+  if (!file) return null;
+  if (!["image/png", "image/jpeg"].includes(file.type)) throw new Error("Please choose a PNG or JPG image");
+  if (file.size > 2 * 1024 * 1024) throw new Error("The image must be 2 MB or smaller");
+  const path = `${uid}/${Date.now()}.${file.type === "image/png" ? "png" : "jpg"}`;
+  const { error } = await sb.storage.from(bucket).upload(path, file, { contentType: file.type });
+  if (error) throw error;
+  return sb.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+};
 
 function CompanyOps({ company, tab }) {
   const h = M.createElement;
   const cid = company && company.id;
-  const [data, setData] = M.useState({ buses: [], routes: [], schedules: [], bookings: [], payments: [], notifications: [], tickets: [] });
+  const sb = dailyTravelSupabase;
+  const [data, setData] = M.useState({ buses: [], routes: [], branches: [], schedules: [], stops: [], bookings: [], payments: [], notifications: [], tickets: [], customers: [] });
   const [loading, setLoading] = M.useState(true);
   const [error, setError] = M.useState("");
   const [notice, setNotice] = M.useState("");
   const [busForm, setBusForm] = M.useState({ registration_number: "", bus_type: "Standard", capacity: 45, layout: "2-3", staff_seats: "" });
-  const [routeForm, setRouteForm] = M.useState({ origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
+  const [branchForm, setBranchForm] = M.useState({ name: "", location: "", manager_name: "", manager_phone: "", manager_email: "" });
+  const [routeForm, setRouteForm] = M.useState({ branch_id: "", origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
   const [schedForm, setSchedForm] = M.useState({ bus_id: "", route_id: "", departure: "", arrival: "", base_fare: "" });
+  const [stopRows, setStopRows] = M.useState([]);
   const [profileForm, setProfileForm] = M.useState(null);
   const [openSchedule, setOpenSchedule] = M.useState(null);
   const [seats, setSeats] = M.useState([]);
   const [ticketCode, setTicketCode] = M.useState("");
   const [ticketResult, setTicketResult] = M.useState(null);
+  const [period, setPeriod] = M.useState("daily");
+  const [msg, setMsg] = M.useState({ to: "all", user_id: "", title: "", message: "" });
+  const [busy, setBusy] = M.useState(false);
 
-  const sb = dailyTravelSupabase;
-  const fail = (what, err) => {
-    console.error(what, err);
-    setError(`${what}: ${err && err.message ? err.message : err}`);
-    setNotice("");
-  };
-  const ok = (msg) => { setError(""); setNotice(msg); };
+  const fail = (what, err) => { console.error(what, err); setError(`${what}: ${err && err.message ? err.message : err}`); setNotice(""); };
+  const ok = (m) => { setError(""); setNotice(m); };
 
   const load = M.useCallback(async () => {
     if (!cid) return;
     const q = (t, order) => sb.from(t).select("*").eq("company_id", cid).order(order || "created_at", { ascending: false });
-    const [buses, routes, schedules, bookings, payments, notifications] = await Promise.all([
-      q("buses"), q("routes"), q("schedules", "departure_datetime"), q("bookings"), q("payments"), q("notifications"),
+    const [buses, routes, branches, schedules, bookings, payments, stops] = await Promise.all([
+      q("buses"), q("routes"), q("branches"), q("schedules", "departure_datetime"), q("bookings"), q("payments"), q("schedule_stops", "sort_order"),
     ]);
-    const firstError = [buses, routes, schedules, bookings, payments, notifications].find((r) => r.error);
+    const firstError = [buses, routes, branches, schedules, bookings, payments].find((r) => r.error);
     if (firstError) fail("Could not load company data", firstError.error);
-    const bookingIds = (bookings.data || []).map((b) => b.id);
+    const notes = await sb.rpc("my_notifications", { p_limit: 100 });
+    const custs = await sb.rpc("company_customers");
+    const ids = (bookings.data || []).map((b) => b.id);
     let tickets = [];
-    if (bookingIds.length) {
-      const t = await sb.from("tickets").select("*").in("booking_id", bookingIds);
-      if (t.error) fail("Could not load tickets", t.error); else tickets = t.data || [];
-    }
+    if (ids.length) { const t = await sb.from("tickets").select("*").in("booking_id", ids); if (!t.error) tickets = t.data || []; }
     setData({
-      buses: buses.data || [], routes: routes.data || [], schedules: schedules.data || [],
-      bookings: bookings.data || [], payments: payments.data || [], notifications: notifications.data || [], tickets,
+      buses: buses.data || [], routes: routes.data || [], branches: branches.data || [], schedules: schedules.data || [], stops: stops.data || [],
+      bookings: bookings.data || [], payments: (payments.data || []).filter((p) => !p.company_hidden), notifications: Array.isArray(notes.data) ? notes.data : [], tickets,
+      customers: Array.isArray(custs.data) ? custs.data : [],
     });
     setLoading(false);
   }, [cid]);
-
   M.useEffect(() => { load(); }, [load]);
   M.useEffect(() => {
     if (!cid) return undefined;
     let timer = null;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(load, 400); };
     let channel = sb.channel(`company-live-${cid}`);
-    ["buses", "routes", "schedules", "bookings", "payments", "notifications", "tickets"].forEach((table) => {
-      const opts = { event: "*", schema: "public", table };
-      if (table !== "tickets") opts.filter = `company_id=eq.${cid}`;
-      channel = channel.on("postgres_changes", opts, refresh);
-    });
+    ["buses", "routes", "branches", "schedules", "bookings", "payments", "schedule_stops"].forEach((table) => { channel = channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `company_id=eq.${cid}` }, refresh); });
+    channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, refresh).on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, refresh);
     channel.subscribe();
     return () => { clearTimeout(timer); sb.removeChannel(channel); };
   }, [cid, load]);
@@ -11625,52 +11657,51 @@ function CompanyOps({ company, tab }) {
     if (company && !profileForm) {
       setProfileForm({
         phone: company.phone || "", address: company.address || "", operating_location: company.operating_location || company.location || "",
-        description: company.description || "", rep_name: company.rep_name || "", rep_phone: company.rep_phone || "",
-        rep_email: company.rep_email || "", logo_url: company.logo_url || "",
-        merchant_mtn_code: company.merchant_mtn_code || company.mtn_momo_code || "",
-        merchant_airtel_code: company.merchant_airtel_code || company.airtel_money_code || "",
+        description: company.description || "", rep_name: company.rep_name || "", rep_phone: company.rep_phone || "", rep_email: company.rep_email || "",
+        support_phone: company.support_phone || "", support_email: company.support_email || "", booking_window_days: company.booking_window_days ?? 5,
+        logo_url: company.logo_url || "", photos: Array.isArray(company.photos) ? company.photos : [],
+        merchant_mtn_code: company.merchant_mtn_code || company.mtn_momo_code || "", merchant_airtel_code: company.merchant_airtel_code || company.airtel_money_code || "",
       });
     }
   }, [company]);
 
-  const run = async (label, promise, success) => {
-    const { error: e } = await promise;
-    if (e) return fail(label, e);
-    ok(success || "Saved");
-    load();
-  };
+  const run = async (label, promise, success) => { const { error: e } = await promise; if (e) return fail(label, e); ok(success || "Saved"); load(); };
 
   const addBus = async () => {
     if (!busForm.registration_number.trim()) return fail("Add bus", "Registration number is required");
     const capacity = Math.max(1, Math.min(80, Number(busForm.capacity) || 45));
     const staff = busForm.staff_seats.split(",").map((s) => s.trim()).filter(Boolean);
-    await run("Add bus", sb.from("buses").insert({
-      company_id: cid, registration_number: busForm.registration_number.trim(), bus_type: busForm.bus_type,
-      capacity, layout: busForm.layout, staff_seats: staff,
-    }), "Bus added");
+    await run("Add bus", sb.from("buses").insert({ company_id: cid, registration_number: busForm.registration_number.trim(), bus_type: busForm.bus_type, capacity, layout: busForm.layout, staff_seats: staff }), "Bus added");
     setBusForm({ ...busForm, registration_number: "", staff_seats: "" });
+  };
+  const addBranch = async () => {
+    if (!branchForm.name.trim()) return fail("Add branch", "Branch name is required");
+    await run("Add branch", sb.from("branches").insert({ company_id: cid, ...branchForm, name: branchForm.name.trim(), status: "active" }), "Branch added");
+    setBranchForm({ name: "", location: "", manager_name: "", manager_phone: "", manager_email: "" });
   };
   const addRoute = async () => {
     if (!routeForm.origin_city.trim() || !routeForm.destination_city.trim()) return fail("Add route", "Origin and destination are required");
     await run("Add route", sb.from("routes").insert({
-      company_id: cid, origin_city: routeForm.origin_city.trim(), destination_city: routeForm.destination_city.trim(),
+      company_id: cid, branch_id: routeForm.branch_id || null, origin_city: routeForm.origin_city.trim(), destination_city: routeForm.destination_city.trim(),
       origin_terminal: routeForm.origin_terminal.trim() || null, destination_terminal: routeForm.destination_terminal.trim() || null,
-      distance_km: routeForm.distance_km ? Number(routeForm.distance_km) : null,
-      base_price: routeForm.base_price ? Number(routeForm.base_price) : null, status: "active",
+      distance_km: routeForm.distance_km ? Number(routeForm.distance_km) : null, base_price: routeForm.base_price ? Number(routeForm.base_price) : null, status: "active",
     }), "Route added");
-    setRouteForm({ origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
+    setRouteForm({ ...routeForm, origin_city: "", destination_city: "", origin_terminal: "", destination_terminal: "", distance_km: "", base_price: "" });
   };
   const addSchedule = async () => {
     const route = data.routes.find((r) => r.id === schedForm.route_id);
     const fare = Number(schedForm.base_fare || (route && route.base_price) || 0);
     if (!schedForm.bus_id || !schedForm.route_id || !schedForm.departure) return fail("Add schedule", "Choose a bus, a route and a departure time");
-    if (!(fare > 0)) return fail("Add schedule", "Enter a fare");
-    await run("Add schedule", sb.from("schedules").insert({
-      company_id: cid, bus_id: schedForm.bus_id, route_id: schedForm.route_id,
-      departure_datetime: new Date(schedForm.departure).toISOString(),
-      arrival_datetime: schedForm.arrival ? new Date(schedForm.arrival).toISOString() : null,
-      base_fare: fare, status: "scheduled",
-    }), "Schedule published: seats were created automatically and customers can book it now");
+    if (!(fare > 0)) return fail("Add schedule", "Enter the fare for the final destination");
+    const stops = stopRows.filter((s) => s.destination_city.trim() && Number(s.price) > 0).map((s) => ({ destination_city: s.destination_city.trim(), price: Number(s.price) }));
+    setBusy(true);
+    const { error: e } = await sb.rpc("create_schedule_with_stops", {
+      p_bus_id: schedForm.bus_id, p_route_id: schedForm.route_id, p_branch_id: route?.branch_id || null,
+      p_departure: new Date(schedForm.departure).toISOString(), p_arrival: schedForm.arrival ? new Date(schedForm.arrival).toISOString() : null, p_base_fare: fare, p_stops: stops,
+    });
+    setBusy(false);
+    if (e) return fail("Publish schedule", e);
+    setStopRows([]); ok("Schedule published. Customers can book it now (within your booking window)."); load();
   };
   const loadSeats = async (scheduleId) => {
     setOpenSchedule(scheduleId);
@@ -11679,18 +11710,17 @@ function CompanyOps({ company, tab }) {
     setSeats((rows || []).sort((a, b) => Number(a.seat_number) - Number(b.seat_number)));
   };
   const toggleSeat = async (seat) => {
-    if (seat.status === "held" || seat.status === "booked") return;
+    if (seat.status === "held" || seat.status === "booked" || seat.label === "staff") return;
     const next = seat.status === "blocked" ? "available" : "blocked";
-    const { error: e } = await sb.from("schedule_seats").update({ status: next }).eq("id", seat.id);
+    const { error: e } = await sb.from("schedule_seats").update({ status: next, label: next === "blocked" ? "offline" : null }).eq("id", seat.id);
     if (e) return fail("Could not update seat", e);
-    const updated = seats.map((s) => (s.id === seat.id ? { ...s, status: next } : s));
+    const updated = seats.map((s) => (s.id === seat.id ? { ...s, status: next, label: next === "blocked" ? "offline" : null } : s));
     setSeats(updated);
     await sb.from("schedules").update({ available_seats: updated.filter((s) => s.status === "available").length }).eq("id", seat.schedule_id);
     load();
   };
   const verifyTicket = async () => {
-    const code = ticketCode.trim();
-    if (!code) return;
+    const code = ticketCode.trim(); if (!code) return;
     const { data: row, error: e } = await sb.from("tickets").select("*").eq("ticket_code", code.toUpperCase()).maybeSingle();
     if (e) return fail("Ticket lookup", e);
     setTicketResult(row || "none");
@@ -11699,142 +11729,449 @@ function CompanyOps({ company, tab }) {
     if (!ticketResult || ticketResult === "none") return;
     const { error: e } = await sb.from("tickets").update({ status: "used" }).eq("id", ticketResult.id);
     if (e) return fail("Could not mark ticket used", e);
-    setTicketResult({ ...ticketResult, status: "used" });
-    ok("Ticket marked as used");
-    load();
+    setTicketResult({ ...ticketResult, status: "used" }); ok("Ticket marked as used"); load();
   };
   const saveProfile = async () => {
-    await run("Save profile", sb.from("bus_companies").update(profileForm).eq("id", cid), "Profile saved");
+    const f = { ...profileForm, booking_window_days: Math.max(1, Math.min(365, Number(profileForm.booking_window_days) || 5)) };
+    await run("Save profile", sb.from("bus_companies").update(f).eq("id", cid), "Profile saved");
+  };
+  const uploadLogo = async (file) => { try { setBusy(true); const url = await dtUploadImage(sb, "company-media", cid, file); setProfileForm({ ...profileForm, logo_url: url }); await sb.from("bus_companies").update({ logo_url: url }).eq("id", cid); ok("Logo updated"); } catch (e) { fail("Logo upload", e); } setBusy(false); };
+  const uploadPhoto = async (file) => { try { setBusy(true); const url = await dtUploadImage(sb, "company-media", cid, file); const photos = [...(profileForm.photos || []), url]; setProfileForm({ ...profileForm, photos }); await sb.from("bus_companies").update({ photos }).eq("id", cid); ok("Photo added"); } catch (e) { fail("Photo upload", e); } setBusy(false); };
+  const removePhoto = async (u) => { const photos = (profileForm.photos || []).filter((x) => x !== u); setProfileForm({ ...profileForm, photos }); await sb.from("bus_companies").update({ photos }).eq("id", cid); };
+  const sendMsg = async () => {
+    if (!msg.title.trim() || !msg.message.trim()) return fail("Send message", "Title and message are required");
+    if (msg.to === "one" && !msg.user_id) return fail("Send message", "Choose a customer");
+    setBusy(true);
+    const { error: e } = await sb.rpc("send_notification", { p_audience: msg.to === "one" ? "customer" : "customer_broadcast", p_title: msg.title, p_message: msg.message, p_user_id: msg.to === "one" ? msg.user_id : null, p_company_id: cid });
+    setBusy(false);
+    if (e) return fail("Send message", e);
+    setMsg({ ...msg, title: "", message: "" }); ok("Message sent"); load();
+  };
+  const clearEarnings = async () => {
+    if (!confirm("Delete your earnings records up to now? They disappear from your dashboard only. The platform and customers keep their own records.")) return;
+    const { data: n, error: e } = await sb.rpc("company_clear_earnings", { p_before: new Date().toISOString() });
+    if (e) return fail("Delete records", e); ok(`${n} record(s) removed`); load();
+  };
+  const deleteAccount = async () => {
+    if (!confirm("Delete your company account permanently? Your buses, routes, schedules and profile are removed. This cannot be undone.")) return;
+    if (prompt("Type DELETE to confirm") !== "DELETE") return;
+    try { await dailyTravelInvokeFunction("delete-account", { confirm: "DELETE" }); await sb.auth.signOut(); location.reload(); } catch (e) { fail("Delete account", e); }
   };
 
-  // helpers
-  const routeName = (id) => { const r = data.routes.find((x) => x.id === id); return r ? `${r.origin_city || ""} → ${r.destination_city || ""}` : "—"; };
-  const busName = (id) => { const b = data.buses.find((x) => x.id === id); return b ? b.registration_number : "—"; };
-  const field = (label, value, onChange, props) => h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#666", gap: 4, flex: "1 1 160px" } }, label,
-    h("input", { style: dtInput, value, onChange: (e) => onChange(e.target.value), ...(props || {}) }));
+  const routeName = (id) => { const r = data.routes.find((x) => x.id === id); return r ? `${r.origin_city || ""} → ${r.destination_city || ""}` : "-"; };
+  const busName = (id) => { const b = data.buses.find((x) => x.id === id); return b ? b.registration_number : "-"; };
+  const field = (label, value, onChange, props) => h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#667", gap: 4, flex: "1 1 160px" } }, label, h("input", { style: dtInput, value, onChange: (e) => onChange(e.target.value), ...(props || {}) }));
   const empty = (text) => h("p", { style: { fontSize: 13, color: "#888", padding: "12px 0" } }, text);
-  const card = (title, ...children) => h("div", { style: dtCard }, h("h3", { style: { fontWeight: 600, fontSize: 14, marginBottom: 12 } }, title), ...children);
+  const card = (title, ...children) => h("div", { style: dtCard }, h("h3", { style: { fontWeight: 700, fontSize: 14, marginBottom: 12, color: DT.navy } }, title), ...children);
   const row = (key, ...cells) => h("div", { key, style: dtRowStyle }, ...cells);
+  const tile = (l, v, color) => h("div", { key: l, style: { borderRadius: 18, padding: 18, color: "#fff", background: color, boxShadow: "0 8px 22px rgba(11,42,91,.15)" } }, h("p", { style: { fontSize: 11, opacity: 0.85, textTransform: "uppercase", letterSpacing: 0.5 } }, l), h("p", { style: { fontWeight: 800, fontSize: 22, marginTop: 6 } }, v));
+  const redBtn = (label, fn) => h("button", { style: dtBtn("#FFEBEE", DT.red), onClick: fn }, label);
 
   const paid = data.payments.filter((p) => p.status === "successful");
   const confirmed = data.bookings.filter((b) => b.status === "confirmed");
   const upcoming = data.schedules.filter((s) => s.status === "scheduled" && new Date(s.departure_datetime) > new Date());
+  const unreadCount = data.notifications.filter((n) => !n.read).length;
+
+  const SeatMap = ({ schedule }) => {
+    const bus = data.buses.find((b) => b.id === schedule.bus_id);
+    const per = /^2[-+]2$/.test(schedule.layout || bus?.layout || "") ? 4 : 5;
+    const colFor = (i) => { const k = i % per; return k < 2 ? k + 1 : k + 2; };
+    const color = (s) => s.status === "booked" || s.status === "held" ? { background: "#1D4ED8", color: "#fff", border: "#1D4ED8" } : s.label === "staff" ? { background: "#9CA3AF", color: "#fff", border: "#9CA3AF" } : s.status === "blocked" ? { background: "#F59E0B", color: "#fff", border: "#F59E0B" } : { background: "#fff", color: DT.ink, border: "#CBD5E1" };
+    return h("div", { style: { padding: "10px 0 16px", maxWidth: 360 } },
+      h("div", { style: { textAlign: "center", fontSize: 11, color: "#667", marginBottom: 6 } }, "Front of bus (driver)"),
+      h("div", { style: { display: "grid", gap: 6, gridTemplateColumns: per === 4 ? "1fr 1fr 22px 1fr 1fr" : "1fr 1fr 22px 1fr 1fr 1fr" } },
+        seats.map((seat, i) => { const c = color(seat); return h("button", { key: seat.id, onClick: () => toggleSeat(seat), title: seat.label || seat.status, style: { gridColumn: colFor(i), gridRow: Math.floor(i / per) + 1, height: 36, borderRadius: 8, border: "1px solid " + c.border, background: c.background, color: c.color, fontSize: 12, fontWeight: 700, cursor: seat.status === "booked" || seat.status === "held" || seat.label === "staff" ? "not-allowed" : "pointer" } }, seat.seat_number); })),
+      h("p", { style: { fontSize: 11, color: "#667", marginTop: 10, lineHeight: 1.7 } }, "White = free (tap to block for offline sale) • Blue = taken • Orange = blocked for offline sale (tap to release) • Grey = staff seat"));
+  };
 
   let body = null;
   if (!cid) body = empty("No company is signed in.");
-  else if (loading) body = empty("Loading your live data…");
+  else if (loading) body = empty("Loading your live data...");
   else if (tab === "overview") {
-    const totalSeats = upcoming.length ? upcoming.reduce((n, s) => n + (data.buses.find((b) => b.id === s.bus_id)?.capacity || 0), 0) : 0;
+    const totalSeats = upcoming.reduce((n, s) => n + (s.seat_total || data.buses.find((b) => b.id === s.bus_id)?.capacity || 0), 0);
     const freeSeats = upcoming.reduce((n, s) => n + (s.available_seats || 0), 0);
-    const stats = [
-      ["Confirmed bookings", confirmed.length],
-      ["Revenue (base)", dtMoney(paid.reduce((n, p) => n + (p.base_amount || 0), 0))],
-      ["Upcoming schedules", upcoming.length],
-      ["Seats occupied", totalSeats ? Math.round(((totalSeats - freeSeats) / totalSeats) * 100) + "%" : "—"],
-    ];
     body = h("div", null,
-      h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 } },
-        stats.map(([l, v]) => h("div", { key: l, style: { ...dtCard, marginBottom: 0 } }, h("p", { style: { fontSize: 11, color: "#888", textTransform: "uppercase" } }, l), h("p", { style: { fontWeight: 700, fontSize: 20, marginTop: 4 } }, v)))),
-      !data.buses.length || !data.routes.length || !upcoming.length
-        ? card("Get started", h("p", { style: { fontSize: 13, lineHeight: 1.6 } },
-            `1. Add a bus (${data.buses.length} so far)  2. Add a route (${data.routes.length})  3. Publish a schedule (${upcoming.length}). Customers see your trips as soon as a schedule is published.`))
-        : null,
+      h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 16 } },
+        tile("Confirmed bookings", confirmed.length, "linear-gradient(135deg,#0798E3,#0B2A5B)"),
+        tile("Your earnings", dtMoney(paid.reduce((n, p) => n + (p.base_amount || 0), 0)), "linear-gradient(135deg,#16A34A,#0F766E)"),
+        tile("Upcoming trips", upcoming.length, "linear-gradient(135deg,#7C3AED,#4338CA)"),
+        tile("Seats occupied", totalSeats ? Math.round(((totalSeats - freeSeats) / totalSeats) * 100) + "%" : "-", "linear-gradient(135deg,#F59E0B,#EA580C)")),
+      !data.buses.length || !data.routes.length || !upcoming.length ? card("Get started", h("p", { style: { fontSize: 13, lineHeight: 1.7 } }, `1. Add a bus (${data.buses.length})   2. Add a branch and route (${data.routes.length})   3. Publish a schedule (${upcoming.length}). Customers see your trips as soon as a schedule is published.`)) : null,
       card("Recent bookings", data.bookings.length ? data.bookings.slice(0, 6).map((b) => row(b.id, h("span", null, `${b.booking_reference || b.id.slice(0, 8)} • seats ${dtSeatList(b.seat_numbers)}`), h("span", null, `${dtMoney(b.total_amount)} • ${b.status}`))) : empty("No bookings yet.")));
+  } else if (tab === "branches") {
+    body = h("div", null,
+      card("Add a branch", h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+        field("Branch name", branchForm.name, (v) => setBranchForm({ ...branchForm, name: v }), { placeholder: "Kampala Main Terminal" }),
+        field("Location", branchForm.location, (v) => setBranchForm({ ...branchForm, location: v })),
+        field("Manager name", branchForm.manager_name, (v) => setBranchForm({ ...branchForm, manager_name: v })),
+        field("Manager phone", branchForm.manager_phone, (v) => setBranchForm({ ...branchForm, manager_phone: v })),
+        field("Manager email", branchForm.manager_email, (v) => setBranchForm({ ...branchForm, manager_email: v })),
+        h("button", { style: dtBtn(), onClick: addBranch }, "Add branch"))),
+      data.branches.length ? data.branches.map((b) => card(`${b.name}${b.location ? " - " + b.location : ""}`,
+        h("p", { style: { fontSize: 12, color: "#667", marginBottom: 8 } }, `Manager: ${b.manager_name || "-"} ${b.manager_phone || ""} ${b.manager_email || ""}`),
+        data.routes.filter((r) => r.branch_id === b.id).map((r) => row(r.id, h("span", null, `${r.origin_city} → ${r.destination_city}`), h("span", null, r.base_price ? dtMoney(r.base_price) : "no fare"))),
+        !data.routes.some((r) => r.branch_id === b.id) ? empty("No routes under this branch yet (add them in Routes).") : null,
+        h("div", { style: { marginTop: 10 } }, redBtn("Delete branch", () => { if (confirm("Delete this branch?")) run("Delete branch", sb.from("branches").delete().eq("id", b.id), "Branch deleted"); })))) : card("Branches", empty("No branches yet. Add your first branch above.")));
   } else if (tab === "buses") {
     body = h("div", null,
       card("Add a bus", h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
         field("Registration number", busForm.registration_number, (v) => setBusForm({ ...busForm, registration_number: v }), { placeholder: "UAA 123B" }),
         field("Bus type", busForm.bus_type, (v) => setBusForm({ ...busForm, bus_type: v })),
-        field("Seats", busForm.capacity, (v) => setBusForm({ ...busForm, capacity: v }), { type: "number", min: 1, max: 80 }),
-        field("Staff/blocked seats (e.g. 1,2)", busForm.staff_seats, (v) => setBusForm({ ...busForm, staff_seats: v })),
+        field("Number of seats", busForm.capacity, (v) => setBusForm({ ...busForm, capacity: v }), { type: "number", min: 1, max: 80 }),
+        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#667", gap: 4, flex: "1 1 160px" } }, "Seat layout",
+          h("select", { style: dtInput, value: busForm.layout, onChange: (e) => setBusForm({ ...busForm, layout: e.target.value }) }, h("option", { value: "2-2" }, "2 + 2 (four per row)"), h("option", { value: "2-3" }, "2 + 3 (five per row)"))),
+        field("Staff seats (e.g. 1,2)", busForm.staff_seats, (v) => setBusForm({ ...busForm, staff_seats: v })),
         h("button", { style: dtBtn(), onClick: addBus }, "Add bus"))),
       card(`Your buses (${data.buses.length})`, data.buses.length ? data.buses.map((b) => row(b.id,
-        h("span", null, `${b.registration_number} • ${b.bus_type || ""} • ${b.capacity} seats`),
-        h("button", { style: dtBtn("#FFEBEE", "#C62828"), onClick: () => { if (confirm("Delete this bus?")) run("Delete bus", sb.from("buses").delete().eq("id", b.id), "Bus deleted"); } }, "Delete"))) : empty("No buses yet.")));
+        h("span", null, `${b.registration_number} • ${b.bus_type || ""} • ${b.capacity} seats • ${String(b.layout || "2-3").replace("-", "+")}${(b.staff_seats || []).length ? " • staff: " + b.staff_seats.join(",") : ""}`),
+        redBtn("Delete", () => { if (confirm("Delete this bus?")) run("Delete bus", sb.from("buses").delete().eq("id", b.id), "Bus deleted"); }))) : empty("No buses yet.")));
   } else if (tab === "routes") {
     body = h("div", null,
       card("Add a route", h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#667", gap: 4, flex: "1 1 160px" } }, "Branch",
+          h("select", { style: dtInput, value: routeForm.branch_id, onChange: (e) => setRouteForm({ ...routeForm, branch_id: e.target.value }) }, h("option", { value: "" }, "No branch"), data.branches.map((b) => h("option", { key: b.id, value: b.id }, b.name)))),
         field("From (city)", routeForm.origin_city, (v) => setRouteForm({ ...routeForm, origin_city: v }), { placeholder: "Kampala" }),
-        field("To (city)", routeForm.destination_city, (v) => setRouteForm({ ...routeForm, destination_city: v }), { placeholder: "Mbarara" }),
+        field("To (final destination)", routeForm.destination_city, (v) => setRouteForm({ ...routeForm, destination_city: v }), { placeholder: "Arua" }),
         field("Origin terminal", routeForm.origin_terminal, (v) => setRouteForm({ ...routeForm, origin_terminal: v })),
         field("Destination terminal", routeForm.destination_terminal, (v) => setRouteForm({ ...routeForm, destination_terminal: v })),
         field("Distance (km)", routeForm.distance_km, (v) => setRouteForm({ ...routeForm, distance_km: v }), { type: "number" }),
-        field("Standard fare (UGX)", routeForm.base_price, (v) => setRouteForm({ ...routeForm, base_price: v }), { type: "number" }),
+        field("Price to final destination (UGX)", routeForm.base_price, (v) => setRouteForm({ ...routeForm, base_price: v }), { type: "number" }),
         h("button", { style: dtBtn(), onClick: addRoute }, "Add route"))),
       card(`Your routes (${data.routes.length})`, data.routes.length ? data.routes.map((r) => row(r.id,
-        h("span", null, `${r.origin_city} → ${r.destination_city} • ${r.base_price ? dtMoney(r.base_price) : "no fare set"} • ${r.status}`),
+        h("span", null, `${(data.branches.find((b) => b.id === r.branch_id) || {}).name || "No branch"} • ${r.origin_city} → ${r.destination_city} • ${r.base_price ? dtMoney(r.base_price) : "no fare set"} • ${r.status}`),
         h("span", { style: { display: "flex", gap: 8 } },
-          h("button", { style: dtBtn("#E8F4FF", "#0798E3"), onClick: () => run("Update route", sb.from("routes").update({ status: r.status === "active" ? "inactive" : "active" }).eq("id", r.id)) }, r.status === "active" ? "Deactivate" : "Activate"),
-          h("button", { style: dtBtn("#FFEBEE", "#C62828"), onClick: () => { if (confirm("Delete this route?")) run("Delete route", sb.from("routes").delete().eq("id", r.id), "Route deleted"); } }, "Delete")))) : empty("No routes yet.")));
+          h("button", { style: dtBtn("#E8F4FF", DT.blue), onClick: () => run("Update route", sb.from("routes").update({ status: r.status === "active" ? "inactive" : "active" }).eq("id", r.id)) }, r.status === "active" ? "Deactivate" : "Activate"),
+          redBtn("Delete", () => { if (confirm("Delete this route?")) run("Delete route", sb.from("routes").delete().eq("id", r.id), "Route deleted"); })))) : empty("No routes yet.")));
   } else if (tab === "schedules" || tab === "seats") {
+    const selRoute = data.routes.find((r) => r.id === schedForm.route_id);
     body = h("div", null,
-      card("Publish a schedule", data.buses.length && data.routes.length ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
-        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#666", gap: 4, flex: "1 1 160px" } }, "Bus",
-          h("select", { style: dtInput, value: schedForm.bus_id, onChange: (e) => setSchedForm({ ...schedForm, bus_id: e.target.value }) }, h("option", { value: "" }, "Choose…"), data.buses.map((b) => h("option", { key: b.id, value: b.id }, `${b.registration_number} (${b.capacity})`)))),
-        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#666", gap: 4, flex: "1 1 160px" } }, "Route",
-          h("select", { style: dtInput, value: schedForm.route_id, onChange: (e) => { const r = data.routes.find((x) => x.id === e.target.value); setSchedForm({ ...schedForm, route_id: e.target.value, base_fare: r && r.base_price ? String(r.base_price) : schedForm.base_fare }); } }, h("option", { value: "" }, "Choose…"), data.routes.filter((r) => r.status === "active").map((r) => h("option", { key: r.id, value: r.id }, `${r.origin_city} → ${r.destination_city}`)))),
-        field("Departure", schedForm.departure, (v) => setSchedForm({ ...schedForm, departure: v }), { type: "datetime-local" }),
-        field("Arrival", schedForm.arrival, (v) => setSchedForm({ ...schedForm, arrival: v }), { type: "datetime-local" }),
-        field("Fare per seat (UGX)", schedForm.base_fare, (v) => setSchedForm({ ...schedForm, base_fare: v }), { type: "number" }),
-        h("button", { style: dtBtn(), onClick: addSchedule }, "Publish"))
-        : empty("Add at least one bus and one route first.")),
-      card(`Your schedules (${data.schedules.length})`, data.schedules.length ? data.schedules.map((s) => h("div", { key: s.id },
-        row(s.id + "r",
-          h("span", null, `${routeName(s.route_id)} • ${busName(s.bus_id)} • ${dtFmt(s.departure_datetime)} • ${dtMoney(s.base_fare)} • ${s.available_seats ?? "?"} seats free • ${s.status}`),
-          h("span", { style: { display: "flex", gap: 8 } },
-            h("button", { style: dtBtn("#E8F4FF", "#0798E3"), onClick: () => (openSchedule === s.id ? setOpenSchedule(null) : loadSeats(s.id)) }, openSchedule === s.id ? "Hide seats" : "Seats"),
-            h("button", { style: dtBtn("#FFF3E0", "#E65100"), onClick: () => run("Update schedule", sb.from("schedules").update({ status: s.status === "scheduled" ? "cancelled" : "scheduled" }).eq("id", s.id)) }, s.status === "scheduled" ? "Cancel trip" : "Reopen"))),
-        openSchedule === s.id ? h("div", { style: { padding: "10px 0 16px" } },
-          h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, seats.map((seat) => h("button", {
-            key: seat.id, onClick: () => toggleSeat(seat), title: seat.status,
-            style: { width: 40, height: 36, borderRadius: 8, border: "1px solid #CCC", fontSize: 12, cursor: seat.status === "held" || seat.status === "booked" ? "not-allowed" : "pointer",
-              background: seat.status === "booked" ? "#C8E6C9" : seat.status === "held" ? "#FFE082" : seat.status === "blocked" ? "#BDBDBD" : "#fff" },
-          }, seat.seat_number))),
-          h("p", { style: { fontSize: 11, color: "#888", marginTop: 8 } }, "White = free, grey = blocked (tap to toggle), yellow = payment pending, green = booked.")) : null)) : empty("No schedules yet.")));
+      tab === "schedules" ? card("Publish a schedule", data.buses.length && data.routes.length ? h("div", null,
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" } },
+          h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#667", gap: 4, flex: "1 1 160px" } }, "Bus", h("select", { style: dtInput, value: schedForm.bus_id, onChange: (e) => setSchedForm({ ...schedForm, bus_id: e.target.value }) }, h("option", { value: "" }, "Choose..."), data.buses.map((b) => h("option", { key: b.id, value: b.id }, `${b.registration_number} (${b.capacity})`)))),
+          h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#667", gap: 4, flex: "1 1 160px" } }, "Route", h("select", { style: dtInput, value: schedForm.route_id, onChange: (e) => { const r = data.routes.find((x) => x.id === e.target.value); setSchedForm({ ...schedForm, route_id: e.target.value, base_fare: r && r.base_price ? String(r.base_price) : schedForm.base_fare }); } }, h("option", { value: "" }, "Choose..."), data.routes.filter((r) => r.status === "active").map((r) => h("option", { key: r.id, value: r.id }, `${r.origin_city} → ${r.destination_city}`)))),
+          field("Departure", schedForm.departure, (v) => setSchedForm({ ...schedForm, departure: v }), { type: "datetime-local" }),
+          field("Arrival", schedForm.arrival, (v) => setSchedForm({ ...schedForm, arrival: v }), { type: "datetime-local" }),
+          field(`Fare to ${selRoute ? selRoute.destination_city : "final destination"} (UGX)`, schedForm.base_fare, (v) => setSchedForm({ ...schedForm, base_fare: v }), { type: "number" })),
+        h("div", { style: { marginTop: 14, background: "#F4F9FF", borderRadius: 14, padding: 14 } },
+          h("p", { style: { fontSize: 12, fontWeight: 700, color: DT.navy, marginBottom: 8 } }, "Destinations along the way and their prices (optional)"),
+          stopRows.map((s, i) => h("div", { key: i, style: { display: "flex", gap: 8, marginBottom: 8 } },
+            h("input", { style: dtInput, placeholder: "Destination, e.g. Nebbi", value: s.destination_city, onChange: (e) => setStopRows(stopRows.map((x, j) => (j === i ? { ...x, destination_city: e.target.value } : x))) }),
+            h("input", { style: { ...dtInput, maxWidth: 150 }, type: "number", placeholder: "Price UGX", value: s.price, onChange: (e) => setStopRows(stopRows.map((x, j) => (j === i ? { ...x, price: e.target.value } : x))) }),
+            redBtn("×", () => setStopRows(stopRows.filter((_, j) => j !== i))))),
+          h("button", { style: dtBtn("#E8F4FF", DT.blue), onClick: () => setStopRows([...stopRows, { destination_city: "", price: "" }]) }, "+ Add destination")),
+        h("div", { style: { marginTop: 12 } }, h("button", { style: dtBtn(), disabled: busy, onClick: addSchedule }, busy ? "Publishing..." : "Publish schedule"))) : empty("Add at least one bus and one route first.")) : null,
+      card(tab === "seats" ? "Choose a trip to manage its seats" : `Your schedules (${data.schedules.length})`, data.schedules.length ? data.schedules.map((s) => {
+        const st = data.stops.filter((x) => x.schedule_id === s.id);
+        return h("div", { key: s.id },
+          row(s.id + "r",
+            h("span", null, `${routeName(s.route_id)} • ${busName(s.bus_id)} • ${dtFmt(s.departure_datetime)} • ${dtMoney(s.base_fare)} • ${s.available_seats ?? "?"} seats free • ${s.status}`),
+            h("span", { style: { display: "flex", gap: 8 } },
+              h("button", { style: dtBtn("#E8F4FF", DT.blue), onClick: () => (openSchedule === s.id ? setOpenSchedule(null) : loadSeats(s.id)) }, openSchedule === s.id ? "Hide seats" : "Seats"),
+              tab === "schedules" ? h("button", { style: dtBtn("#FFF3E0", "#E65100"), onClick: () => run("Update schedule", sb.from("schedules").update({ status: s.status === "scheduled" ? "cancelled" : "scheduled" }).eq("id", s.id)) }, s.status === "scheduled" ? "Cancel trip" : "Reopen") : null)),
+          st.length && tab === "schedules" ? h("div", { style: { fontSize: 12, color: "#556", padding: "4px 0 8px" } }, "Pricing: ", st.map((x) => `${x.destination_city} ${dtMoney(x.price)}`).join(" • ")) : null,
+          openSchedule === s.id ? h(SeatMap, { schedule: s }) : null);
+      }) : empty("No schedules yet.")));
   } else if (tab === "bookings") {
     body = h("div", null,
       card("Verify a ticket at boarding", h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } },
-        h("input", { style: dtInput, placeholder: "Ticket code e.g. TKT-1A2B3C4D5E", value: ticketCode, onChange: (e) => setTicketCode(e.target.value) }),
-        h("button", { style: dtBtn(), onClick: verifyTicket }, "Check")),
-        ticketResult === "none" ? h("p", { style: { color: "#C62828", fontSize: 13, marginTop: 10 } }, "No ticket found with that code for your company.")
-          : ticketResult ? h("p", { style: { fontSize: 13, marginTop: 10 } }, `Seat ${ticketResult.seat_number} • ${ticketResult.passenger_name || "passenger"} • ${ticketResult.status}`,
-              ticketResult.status === "valid" ? h("button", { style: { ...dtBtn("#2E7D32"), marginLeft: 10 }, onClick: boardTicket }, "Mark as boarded") : null) : null),
-      card(`Bookings (${data.bookings.length})`, data.bookings.length ? data.bookings.map((b) => {
-        const t = data.tickets.filter((x) => x.booking_id === b.id);
-        return row(b.id, h("span", null, `${b.booking_reference || b.id.slice(0, 8)} • seats ${dtSeatList(b.seat_numbers)} • ${t.map((x) => x.ticket_code).join(", ") || "no tickets yet"}`),
-          h("span", null, `${dtMoney(b.total_amount)} • ${b.status} • ${dtFmt(b.created_at)}`));
-      }) : empty("No bookings yet.")));
+        h("input", { style: dtInput, placeholder: "Ticket code e.g. TKT-1A2B3C4D5E", value: ticketCode, onChange: (e) => setTicketCode(e.target.value) }), h("button", { style: dtBtn(), onClick: verifyTicket }, "Check")),
+        ticketResult === "none" ? h("p", { style: { color: DT.red, fontSize: 13, marginTop: 10 } }, "No ticket found with that code for your company.")
+          : ticketResult ? h("p", { style: { fontSize: 13, marginTop: 10 } }, `Seat ${ticketResult.seat_number} • ${ticketResult.passenger_name || "passenger"} • ${ticketResult.status}`, ticketResult.status === "valid" ? h("button", { style: { ...dtBtn(DT.green), marginLeft: 10 }, onClick: boardTicket }, "Mark as boarded") : null) : null),
+      card(`Bookings (${data.bookings.length})`, data.bookings.length ? data.bookings.map((b) => { const t = data.tickets.filter((x) => x.booking_id === b.id); return row(b.id, h("span", null, `${b.booking_reference || b.id.slice(0, 8)} • to ${b.destination_city || "-"} • seats ${dtSeatList(b.seat_numbers)} • ${t.map((x) => x.ticket_code).join(", ") || "no tickets yet"}`), h("span", null, `${dtMoney(b.base_fare)} • ${b.status} • ${dtFmt(b.created_at)}`)); }) : empty("No bookings yet.")));
   } else if (tab === "payments") {
     body = card(`Payments (${data.payments.length})`, data.payments.length ? data.payments.map((p) => row(p.id,
-      h("span", null, `${p.payment_method === "airtel_money" ? "Airtel Money" : "MTN MoMo"} • ${p.provider_reference || p.id.slice(0, 8)}`),
-      h("span", null, `${dtMoney(p.amount)} (you: ${dtMoney(p.base_amount)}) • ${p.status} • settlement ${p.settlement_status || "pending"}`))) : empty("No payments yet."));
+      h("span", null, `${p.payment_method === "airtel_money" ? "Airtel Money" : p.payment_method === "bank" ? "Bank" : "MTN MoMo"} • ${p.provider_reference || p.id.slice(0, 8)}`),
+      h("span", null, `You receive ${dtMoney(p.base_amount)} • ${p.status} • payout ${p.settlement_status || "pending"}`))) : empty("No payments yet."));
   } else if (tab === "earnings") {
+    const keyFn = period === "daily" ? dtDay : period === "weekly" ? dtWeekKey : dtMonthKey;
+    const groups = {}; paid.forEach((p) => { const k = keyFn(p.created_at); groups[k] = (groups[k] || 0) + (p.base_amount || 0); });
+    const keys = Object.keys(groups).sort().slice(-12);
+    const rows = keys.map((k) => ({ label: period === "monthly" ? k.slice(2) : k.slice(5), value: groups[k] }));
     const sum = (arr, k) => arr.reduce((n, p) => n + (p[k] || 0), 0);
-    const mtn = paid.filter((p) => p.payment_method !== "airtel_money");
-    const airtel = paid.filter((p) => p.payment_method === "airtel_money");
-    body = h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 12 } },
-      [["Gross collected", dtMoney(sum(paid, "amount"))], ["Your earnings", dtMoney(sum(paid, "base_amount"))], ["Platform fee", dtMoney(sum(paid, "admin_amount"))],
-        ["MTN MoMo", `${mtn.length} • ${dtMoney(sum(mtn, "base_amount"))}`], ["Airtel Money", `${airtel.length} • ${dtMoney(sum(airtel, "base_amount"))}`],
-        ["Pending settlement", dtMoney(sum(paid.filter((p) => (p.settlement_status || "pending") === "pending"), "base_amount"))]]
-        .map(([l, v]) => h("div", { key: l, style: { ...dtCard, marginBottom: 0 } }, h("p", { style: { fontSize: 11, color: "#888", textTransform: "uppercase" } }, l), h("p", { style: { fontWeight: 700, fontSize: 18, marginTop: 4 } }, v))));
+    const today = dtDay(new Date()), week = dtWeekKey(new Date()), month = dtMonthKey(new Date());
+    body = h("div", null,
+      h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 16 } },
+        tile("Today", dtMoney(sum(paid.filter((p) => dtDay(p.created_at) === today), "base_amount")), "linear-gradient(135deg,#0798E3,#0B2A5B)"),
+        tile("This week", dtMoney(sum(paid.filter((p) => dtWeekKey(p.created_at) === week), "base_amount")), "linear-gradient(135deg,#16A34A,#0F766E)"),
+        tile("This month", dtMoney(sum(paid.filter((p) => dtMonthKey(p.created_at) === month), "base_amount")), "linear-gradient(135deg,#7C3AED,#4338CA)"),
+        tile("All shown", dtMoney(sum(paid, "base_amount")), "linear-gradient(135deg,#F59E0B,#EA580C)")),
+      card("Earnings", h("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, ["daily", "weekly", "monthly"].map((p) => h("button", { key: p, onClick: () => setPeriod(p), style: dtBtn(period === p ? undefined : "#EEF4FA", period === p ? "#fff" : DT.navy) }, p[0].toUpperCase() + p.slice(1)))),
+        rows.length ? h(DtBars, { rows, color: DT.blue }) : empty("No earnings yet."),
+        h("div", { style: { marginTop: 8 } }, redBtn("Delete earnings records", clearEarnings))));
   } else if (tab === "notifications") {
-    body = card(`Notifications (${data.notifications.length})`, data.notifications.length ? data.notifications.map((n) => row(n.id,
-      h("span", { style: { fontWeight: n.is_read ? 400 : 700 } }, `${n.title || "Notice"} — ${n.message || ""}`),
-      n.is_read ? h("span", { style: { color: "#888" } }, dtFmt(n.created_at)) : h("button", { style: dtBtn("#E8F4FF", "#0798E3"), onClick: () => run("Mark read", sb.from("notifications").update({ is_read: true }).eq("id", n.id), "Marked as read") }, "Mark read"))) : empty("No notifications."));
+    body = h("div", null,
+      card("Message your customers", h("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        h("select", { style: dtInput, value: msg.to, onChange: (e) => setMsg({ ...msg, to: e.target.value }) }, h("option", { value: "all" }, "All my customers"), h("option", { value: "one" }, "One customer")),
+        msg.to === "one" ? h("select", { style: dtInput, value: msg.user_id, onChange: (e) => setMsg({ ...msg, user_id: e.target.value }) }, h("option", { value: "" }, "Choose customer..."), data.customers.map((c) => h("option", { key: c.user_id, value: c.user_id }, `${c.full_name || "Customer"} ${c.phone || ""} (${c.bookings} bookings)`))) : null,
+        h("input", { style: dtInput, placeholder: "Title", value: msg.title, onChange: (e) => setMsg({ ...msg, title: e.target.value }) }),
+        h("textarea", { style: { ...dtInput, height: 80 }, placeholder: "Message", value: msg.message, onChange: (e) => setMsg({ ...msg, message: e.target.value }) }),
+        h("div", null, h("button", { style: dtBtn(), disabled: busy, onClick: sendMsg }, "Send")))),
+      card(`Inbox (${data.notifications.length}${unreadCount ? ", " + unreadCount + " unread" : ""})`, data.notifications.length ? data.notifications.map((n) => row(n.id,
+        h("span", { style: { fontWeight: n.read ? 400 : 700, flex: 1 } }, `${n.title || "Notice"} - ${n.message || ""}`),
+        n.read ? h("span", { style: { color: "#888" } }, dtFmt(n.created_at)) : h("button", { style: dtBtn("#E8F4FF", DT.blue), onClick: async () => { await sb.rpc("mark_notification_read", { p_id: n.id }); load(); } }, "Mark read"))) : empty("No notifications. New ticket sales and messages from Daily Travel appear here.")));
   } else if (tab === "profile" && profileForm) {
-    const keys = [["phone", "Phone"], ["address", "Address"], ["operating_location", "Operating location"], ["description", "Description"], ["rep_name", "Representative name"], ["rep_phone", "Representative phone"], ["rep_email", "Representative email"], ["logo_url", "Logo URL"], ["merchant_mtn_code", "MTN MoMo merchant code"], ["merchant_airtel_code", "Airtel Money merchant code"]];
-    body = card(`${company.company_name} — ${company.approval_status || "pending"}`,
-      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10 } }, keys.map(([k, l]) => h("div", { key: k, style: { flex: "1 1 220px", display: "flex" } }, field(l, profileForm[k], (v) => setProfileForm({ ...profileForm, [k]: v }))))),
-      h("button", { style: { ...dtBtn(), marginTop: 14 }, onClick: saveProfile }, "Save profile"));
+    const keys = [["phone", "Phone"], ["address", "Address"], ["operating_location", "Operating location"], ["description", "Description"], ["rep_name", "Representative name"], ["rep_phone", "Representative phone"], ["rep_email", "Representative email"], ["support_phone", "Support phone (shown on tickets)"], ["support_email", "Support email (shown on tickets)"], ["merchant_mtn_code", "MTN MoMo merchant code"], ["merchant_airtel_code", "Airtel Money merchant code"]];
+    body = h("div", null,
+      card(`${company.company_name} - ${company.approval_status || "pending"}`,
+        h("div", { style: { display: "flex", gap: 16, alignItems: "center", marginBottom: 14, flexWrap: "wrap" } },
+          profileForm.logo_url ? h("img", { src: profileForm.logo_url, alt: "Logo", style: { width: 72, height: 72, borderRadius: 16, objectFit: "cover", border: "1px solid #E6EEF7" } }) : h("div", { style: { width: 72, height: 72, borderRadius: 16, background: "#EEF4FA", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, color: DT.blue } }, (company.company_name || "?").slice(0, 2).toUpperCase()),
+          h("label", { style: { ...dtBtn("#E8F4FF", DT.blue), display: "inline-block" } }, busy ? "Uploading..." : "Upload logo (PNG/JPG)", h("input", { type: "file", accept: "image/png,image/jpeg", style: { display: "none" }, onChange: (e) => uploadLogo(e.target.files[0]) }))),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10 } }, keys.map(([k, l]) => h("div", { key: k, style: { flex: "1 1 220px", display: "flex" } }, field(l, profileForm[k], (v) => setProfileForm({ ...profileForm, [k]: v })))),
+          h("div", { style: { flex: "1 1 220px", display: "flex" } }, field("Customers can book up to this many days ahead", profileForm.booking_window_days, (v) => setProfileForm({ ...profileForm, booking_window_days: v }), { type: "number", min: 1, max: 365 }))),
+        h("button", { style: { ...dtBtn(), marginTop: 14 }, onClick: saveProfile }, "Save profile")),
+      card("Company photos", h("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } },
+        (profileForm.photos || []).map((u) => h("div", { key: u, style: { position: "relative" } }, h("img", { src: u, alt: "", style: { width: 110, height: 80, objectFit: "cover", borderRadius: 12 } }), h("button", { onClick: () => removePhoto(u), style: { position: "absolute", top: 2, right: 2, border: 0, borderRadius: 99, width: 22, height: 22, cursor: "pointer", background: "#fff" } }, "×"))),
+        h("label", { style: { ...dtBtn("#E8F4FF", DT.blue), display: "inline-flex", alignItems: "center" } }, "+ Add photo (PNG/JPG)", h("input", { type: "file", accept: "image/png,image/jpeg", style: { display: "none" }, onChange: (e) => uploadPhoto(e.target.files[0]) })))),
+      card("Danger zone", h("p", { style: { fontSize: 12, color: "#667", marginBottom: 10 } }, "Deleting your account removes your company from Daily Travel. Past bookings and payments stay with the platform for record keeping."), redBtn("Delete my company account", deleteAccount)));
   }
 
   return h("div", { style: { maxWidth: 1000, margin: "0 auto" } },
-    h("h2", { style: { fontWeight: 700, fontSize: 18, marginBottom: 14, textTransform: "capitalize" } }, tab === "seats" ? "Seat management" : tab),
+    h("h2", { style: { fontWeight: 800, fontSize: 20, marginBottom: 14, color: DT.navy, textTransform: "capitalize" } }, tab === "seats" ? "Seat management" : tab),
     error ? h("div", { role: "alert", style: { background: "#FFEBEE", color: "#B71C1C", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 } }, error) : null,
     notice ? h("div", { style: { background: "#E8F5E9", color: "#1B5E20", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 } }, notice) : null,
     body);
 }
 // ---- end company dashboard modules ----
+// ---- Daily Travel extras: recovery, registration fee, notifications, profile, delete account ----
+(() => {
+  const h = M.createElement;
+  const sb = dailyTravelSupabase;
+  const C = { navy: "#0B2A5B", blue: "#0798E3", teal: "#62C9C5", amber: "#FDB515", ink: "#202124", grey: "#6B7280" };
+  const css = `
+  .dtx-back{position:fixed;inset:0;background:rgba(11,42,91,.55);display:flex;align-items:center;justify-content:center;z-index:99990;padding:16px;backdrop-filter:blur(3px)}
+  .dtx-card{background:#fff;border-radius:22px;width:100%;max-width:420px;max-height:92vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.3);font-family:'Plus Jakarta Sans',Inter,system-ui,sans-serif;color:${C.ink}}
+  .dtx-head{background:linear-gradient(135deg,${C.navy},${C.blue});color:#fff;padding:18px 20px;border-radius:22px 22px 0 0;display:flex;justify-content:space-between;align-items:center}
+  .dtx-head b{font-size:16px}.dtx-x{background:rgba(255,255,255,.2);border:0;color:#fff;width:30px;height:30px;border-radius:50%;cursor:pointer;font-size:16px}
+  .dtx-body{padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+  .dtx-in{width:100%;box-sizing:border-box;border:1px solid #DDE3EA;border-radius:12px;padding:12px 14px;font-size:14px;outline:none}
+  .dtx-in:focus{border-color:${C.blue};box-shadow:0 0 0 3px rgba(7,152,227,.15)}
+  .dtx-btn{border:0;border-radius:12px;padding:12px 16px;font-weight:700;font-size:14px;cursor:pointer;background:linear-gradient(135deg,${C.blue},${C.teal});color:#fff}
+  .dtx-btn.alt{background:#EEF4FA;color:${C.navy}}.dtx-btn.danger{background:#C62828}
+  .dtx-btn:disabled{opacity:.6;cursor:wait}
+  .dtx-muted{font-size:12px;color:${C.grey};line-height:1.5}
+  .dtx-fab{position:fixed;right:16px;bottom:84px;z-index:99980;width:54px;height:54px;border-radius:50%;border:0;cursor:pointer;color:#fff;font-size:22px;background:linear-gradient(135deg,${C.navy},${C.blue});box-shadow:0 10px 26px rgba(7,152,227,.45)}
+  .dtx-badge{position:absolute;top:-4px;right:-4px;background:${C.amber};color:${C.navy};border-radius:999px;min-width:20px;height:20px;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;padding:0 5px}
+  .dtx-tabs{display:flex;gap:6px;padding:12px 16px 0}.dtx-tab{flex:1;border:0;border-radius:999px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;background:#EEF4FA;color:${C.navy}}
+  .dtx-tab.on{background:${C.blue};color:#fff}
+  .dtx-note{border-radius:14px;padding:12px 14px;background:#F4F9FF;border:1px solid #DCEBFA}
+  .dtx-note.unread{background:#FFF8E1;border-color:#FFE29A}
+  .dtx-note b{font-size:13px}.dtx-note p{margin:4px 0 0;font-size:12.5px;color:#444}.dtx-note small{color:${C.grey};font-size:11px}
+  .dtx-av{width:84px;height:84px;border-radius:50%;object-fit:cover;background:#EEF4FA;border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.15)}
+  `;
+  const style = document.createElement("style");
+  style.textContent = css;
+  document.head.appendChild(style);
+
+  const callPublicFunction = async (slug, body) => {
+    const r = await fetch(`${dailyTravelFunctionsBase}/${dtFn(slug)}`, {
+      method: "POST",
+      headers: { apikey: DAILY_TRAVEL_SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${DAILY_TRAVEL_SUPABASE_PUBLISHABLE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
+    return j;
+  };
+  const Modal = ({ title, onClose, children }) =>
+    h("div", { className: "dtx-back", onClick: (e) => e.target === e.currentTarget && onClose && onClose() },
+      h("div", { className: "dtx-card" },
+        h("div", { className: "dtx-head" }, h("b", null, title), onClose && h("button", { className: "dtx-x", onClick: onClose }, "×")),
+        h("div", { className: "dtx-body" }, children)));
+
+  // ---------- password recovery ----------
+  function Recovery({ onClose }) {
+    const [step, setStep] = M.useState(1);
+    const [ident, setIdent] = M.useState("");
+    const [email, setEmail] = M.useState("");
+    const [sentTo, setSentTo] = M.useState("");
+    const [code, setCode] = M.useState("");
+    const [pw, setPw] = M.useState("");
+    const [busy, setBusy] = M.useState(false);
+    const [msg, setMsg] = M.useState("");
+    const send = async () => {
+      if (!ident.trim()) return setMsg("Enter your registered email or phone number");
+      setBusy(true); setMsg("");
+      try {
+        const r = await callPublicFunction("recover-password", { identifier: ident.trim() });
+        setSentTo(r.sent_to || "your registered email");
+        if (ident.includes("@")) setEmail(ident.trim().toLowerCase());
+        setStep(2);
+      } catch (e) { setMsg(e.message); }
+      setBusy(false);
+    };
+    const reset = async () => {
+      if (!email.includes("@")) return setMsg("Type the full email address the code was sent to");
+      if (!code.trim()) return setMsg("Enter the code from the email");
+      if (pw.length < 6) return setMsg("Use a password of at least 6 characters");
+      setBusy(true); setMsg("");
+      try {
+        const { error } = await sb.auth.verifyOtp({ email, token: code.trim(), type: "recovery" });
+        if (error) throw error;
+        const { error: e2 } = await sb.auth.updateUser({ password: pw });
+        if (e2) throw e2;
+        await sb.auth.signOut();
+        setStep(3);
+      } catch (e) { setMsg(e.message || "That code is not valid or has expired"); }
+      setBusy(false);
+    };
+    return h(Modal, { title: "Reset your password", onClose },
+      step === 1 && [
+        h("p", { className: "dtx-muted", key: "a" }, "Enter the email or phone number you registered with. We send a 6-digit code to the email on your account."),
+        h("input", { key: "b", className: "dtx-in", placeholder: "Email or phone number", value: ident, onChange: (e) => setIdent(e.target.value) }),
+        h("button", { key: "c", className: "dtx-btn", disabled: busy, onClick: send }, busy ? "Sending..." : "Send code"),
+      ],
+      step === 2 && [
+        h("p", { className: "dtx-muted", key: "a" }, `If an account matches, a code was sent to ${sentTo}. It can take a minute.`),
+        !ident.includes("@") && h("input", { key: "e", className: "dtx-in", placeholder: "Full email address the code was sent to", value: email, onChange: (e) => setEmail(e.target.value) }),
+        h("input", { key: "b", className: "dtx-in", placeholder: "Code from the email", value: code, inputMode: "numeric", onChange: (e) => setCode(e.target.value) }),
+        h("input", { key: "c", className: "dtx-in", type: "password", placeholder: "New password", value: pw, onChange: (e) => setPw(e.target.value) }),
+        h("button", { key: "d", className: "dtx-btn", disabled: busy, onClick: reset }, busy ? "Saving..." : "Set new password"),
+        h("button", { key: "f", className: "dtx-btn alt", onClick: () => { setStep(1); setMsg(""); } }, "Send a new code"),
+      ],
+      step === 3 && [
+        h("p", { key: "a", style: { fontWeight: 700, color: "#2E7D32" } }, "Password changed. You can sign in now."),
+        h("button", { key: "b", className: "dtx-btn", onClick: onClose }, "Back to sign in"),
+      ],
+      msg && h("p", { className: "dtx-muted", style: { color: "#C62828" } }, msg));
+  }
+
+  // ---------- registration fee step ----------
+  function FeeStep({ pricing, onDone, onCancel }) {
+    const [method, setMethod] = M.useState("mtn_momo");
+    const [ref, setRef] = M.useState("");
+    const code = method === "mtn_momo" ? pricing.mtn_merchant_code : pricing.airtel_merchant_code;
+    return h(Modal, { title: "Registration fee", onClose: onCancel },
+      h("div", { className: "dtx-note" },
+        h("b", null, `Pay UGX ${Number(pricing.fee).toLocaleString()} to activate your company`),
+        h("p", null, "Send the fee to the Daily Travel merchant number below, then enter the transaction reference. An administrator confirms it before your company is approved.")),
+      h("div", { style: { display: "flex", gap: 8 } },
+        [["mtn_momo", "MTN MoMo", "#FFCC00", "#202124"], ["airtel_money", "Airtel Money", "#E4002B", "#fff"]].map(([id, label, bg, fg]) =>
+          h("button", { key: id, onClick: () => setMethod(id), className: "dtx-btn", style: { flex: 1, background: bg, color: fg, outline: method === id ? "3px solid " + C.navy : "none" } }, label))),
+      h("div", { className: "dtx-note" }, h("small", null, "Merchant code"), h("p", { style: { fontSize: 22, fontWeight: 800, color: C.navy, margin: "2px 0 0" } }, code || "Not set - contact Daily Travel")),
+      h("input", { className: "dtx-in", placeholder: "Transaction ID / reference", value: ref, onChange: (e) => setRef(e.target.value) }),
+      h("button", { className: "dtx-btn", onClick: () => (ref.trim() ? onDone({ method, reference: ref.trim() }) : alert("Enter the transaction reference")) }, "Submit registration"));
+  }
+  window.dailyTravelAskRegistrationFee = async () => {
+    let pricing = null;
+    try { pricing = (await sb.rpc("get_public_pricing")).data; } catch {}
+    const fee = Number(pricing?.registration_fee_amount || 0);
+    if (!fee) return { method: "", reference: "" };
+    return await new Promise((resolve, reject) => {
+      const host = document.createElement("div");
+      document.body.appendChild(host);
+      const root = Tc.createRoot(host);
+      const close = () => { root.unmount(); host.remove(); };
+      root.render(h(FeeStep, { pricing: { ...pricing, fee }, onDone: (v) => { close(); resolve(v); }, onCancel: () => { close(); reject(new Error("cancelled")); } }));
+    });
+  };
+  window.dailyTravelOpenRecovery = () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = Tc.createRoot(host);
+    root.render(h(Recovery, { onClose: () => { root.unmount(); host.remove(); } }));
+  };
+
+  // ---------- customer panel: notifications, profile, delete ----------
+  function Panel() {
+    const [user, setUser] = M.useState(null); // customer profile row
+    const [open, setOpen] = M.useState(false);
+    const [tab, setTab] = M.useState("inbox");
+    const [items, setItems] = M.useState([]);
+    const [busy, setBusy] = M.useState(false);
+    const [name, setName] = M.useState("");
+    const [phone, setPhone] = M.useState("");
+    const load = M.useCallback(async () => {
+      const { data } = await sb.rpc("my_notifications", { p_limit: 100 });
+      if (Array.isArray(data)) setItems(data);
+    }, []);
+    M.useEffect(() => {
+      let live = true;
+      const check = async () => {
+        const { data: { session } } = await sb.auth.getSession();
+        if (!session) return live && setUser(null);
+        const { data: co } = await sb.from("bus_companies").select("id").eq("owner_id", session.user.id).maybeSingle();
+        if (co) return live && setUser(null); // company dashboard has its own inbox
+        const { data: u } = await sb.from("users").select("*").eq("id", session.user.id).maybeSingle();
+        if (live && u && u.role === "customer") { setUser(u); setName(u.full_name || ""); setPhone(u.phone || ""); }
+      };
+      check();
+      const { data: sub } = sb.auth.onAuthStateChange(() => setTimeout(check, 300));
+      return () => { live = false; sub?.subscription?.unsubscribe?.(); };
+    }, []);
+    M.useEffect(() => {
+      if (!user) return undefined;
+      load();
+      const tick = async () => { try { await sb.rpc("dispatch_departure_alerts"); } catch {} load(); };
+      tick();
+      const t = setInterval(tick, 60000);
+      const ch = sb.channel("dtx-notes-" + user.id)
+        .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => load()).subscribe();
+      return () => { clearInterval(t); sb.removeChannel(ch); };
+    }, [user?.id]);
+    if (!user) return null;
+    const unread = items.filter((n) => !n.read).length;
+    const markAll = async () => { for (const n of items.filter((x) => !x.read)) await sb.rpc("mark_notification_read", { p_id: n.id }); load(); };
+    const upload = async (file) => {
+      if (!file) return;
+      if (!["image/png", "image/jpeg"].includes(file.type)) return alert("Please choose a PNG or JPG image");
+      if (file.size > 2 * 1024 * 1024) return alert("The image must be 2 MB or smaller");
+      setBusy(true);
+      try {
+        const ext = file.type === "image/png" ? "png" : "jpg";
+        const path = `${user.id}/avatar-${Date.now()}.${ext}`;
+        const { error } = await sb.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+        if (error) throw error;
+        const url = sb.storage.from("avatars").getPublicUrl(path).data.publicUrl;
+        const { error: e2 } = await sb.from("users").update({ avatar_url: url }).eq("id", user.id);
+        if (e2) throw e2;
+        setUser({ ...user, avatar_url: url });
+      } catch (e) { alert(e.message || "Upload failed"); }
+      setBusy(false);
+    };
+    const save = async () => {
+      setBusy(true);
+      const { error } = await sb.from("users").update({ full_name: name, phone }).eq("id", user.id);
+      setBusy(false);
+      if (error) alert(error.message); else { setUser({ ...user, full_name: name, phone }); alert("Profile saved"); }
+    };
+    const del = async () => {
+      if (!confirm("Delete your account permanently? Your tickets and receipts stay with the bus company for their records, but your profile, notifications and login are removed.")) return;
+      if (prompt('Type DELETE to confirm') !== "DELETE") return;
+      setBusy(true);
+      try { await dailyTravelInvokeFunction("delete-account", { confirm: "DELETE" }); await sb.auth.signOut(); location.reload(); }
+      catch (e) { alert(e.message); setBusy(false); }
+    };
+    return [
+      h("button", { key: "fab", className: "dtx-fab", onClick: () => setOpen(true), "aria-label": "Notifications and profile" }, "🔔", unread > 0 && h("span", { className: "dtx-badge" }, unread)),
+      open && h(Modal, { key: "m", title: "My Daily Travel", onClose: () => setOpen(false) },
+        h("div", { className: "dtx-tabs", style: { padding: 0 } }, [["inbox", "Notifications"], ["profile", "Profile"]].map(([id, l]) =>
+          h("button", { key: id, className: "dtx-tab" + (tab === id ? " on" : ""), onClick: () => setTab(id) }, l))),
+        tab === "inbox" && [
+          unread > 0 && h("button", { key: "r", className: "dtx-btn alt", onClick: markAll }, "Mark all as read"),
+          items.length === 0 && h("p", { key: "e", className: "dtx-muted" }, "No notifications yet. Payment confirmations, departure alerts and messages from bus companies appear here."),
+          ...items.map((n) => h("div", { key: n.id, className: "dtx-note" + (n.read ? "" : " unread"), onClick: () => !n.read && sb.rpc("mark_notification_read", { p_id: n.id }).then(load) },
+            h("b", null, n.title), h("p", null, n.message), h("small", null, new Date(n.created_at).toLocaleString()))),
+        ],
+        tab === "profile" && [
+          h("div", { key: "a", style: { textAlign: "center" } },
+            h("img", { className: "dtx-av", src: user.avatar_url || "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='84' height='84'><rect width='84' height='84' fill='#EEF4FA'/><text x='42' y='54' font-size='34' text-anchor='middle' fill='${C.blue}' font-family='Arial'>${(user.full_name || "?").slice(0, 1).toUpperCase()}</text></svg>`), alt: "" }),
+            h("div", null, h("label", { className: "dtx-btn alt", style: { display: "inline-block", marginTop: 10, fontSize: 12 } }, busy ? "Uploading..." : "Change photo (PNG/JPG)",
+              h("input", { type: "file", accept: "image/png,image/jpeg", style: { display: "none" }, onChange: (e) => upload(e.target.files[0]) })))),
+          h("input", { key: "b", className: "dtx-in", placeholder: "Full name", value: name, onChange: (e) => setName(e.target.value) }),
+          h("input", { key: "c", className: "dtx-in", placeholder: "Phone", value: phone, onChange: (e) => setPhone(e.target.value) }),
+          h("button", { key: "d", className: "dtx-btn", disabled: busy, onClick: save }, "Save profile"),
+          h("button", { key: "f", className: "dtx-btn alt", onClick: async () => { await sb.auth.signOut(); location.reload(); } }, "Sign out"),
+          h("button", { key: "e", className: "dtx-btn danger", disabled: busy, onClick: del }, "Delete my account"),
+        ]),
+    ];
+  }
+  const host = document.createElement("div");
+  host.id = "dtx-root";
+  document.body.appendChild(host);
+  Tc.createRoot(host).render(h(Panel));
+})();
+// ---- end Daily Travel extras ----
+
 
 var fo = ({ children: A, width: e }) =>
     c("div", {
@@ -12157,7 +12494,8 @@ function co() {
     let h = [
       ...dr.filter(
         (H) =>
-          H.origin.toLowerCase().includes(O.toLowerCase()) &&
+          (H.origin.toLowerCase().includes(O.toLowerCase()) || (H.company_name || "").toLowerCase().includes(O.toLowerCase())) &&
+          (!H.departure_datetime || new Date(H.departure_datetime) > new Date()) &&
           H.destination.toLowerCase().includes(L.toLowerCase()) &&
           H.date >= ir,
       ),
@@ -12181,6 +12519,8 @@ function co() {
             dailyTravelSupabase.from("routes").select("*"),
             dailyTravelSupabase.from("schedules").select("*").gte("departure_datetime", new Date().toISOString()).order("departure_datetime"),
             dailyTravelSupabase.from("schedule_seats").select("*"),
+            dailyTravelSupabase.from("schedule_stops").select("*"),
+            dailyTravelSupabase.rpc("get_public_pricing"),
           ]);
         if (!active) return;
         const failed = results.find((r) => r.error);
@@ -12188,7 +12528,8 @@ function co() {
           dailyTravelNotify("Could not load live trips: " + failed.error.message + " (showing demo data)");
           return;
         }
-        const [{ data: companies }, { data: routes }, { data: schedules }, { data: seats }] = results;
+        const [{ data: companies }, { data: routes }, { data: schedules }, { data: seats }, { data: stops }, { data: pricing }] = results;
+        if (pricing) window.dailyTravelPricing = pricing;
         window.dailyTravelLive = true;
         if (companies) {
           Wc(
@@ -12214,12 +12555,12 @@ function co() {
             (map[seat.schedule_id] ||= []).push(seat);
             return map;
           }, {});
-          const mappedSchedules = schedules.map((schedule) => {
+          const mappedSchedules = schedules.flatMap((schedule) => { const sstops = (stops || []).filter((x) => x.schedule_id === schedule.id); return (sstops.length ? sstops : [null]).map((stop) => {
             const route = routeMap[schedule.route_id] || {};
             const company = companyMap[schedule.company_id] || {};
             const scheduleSeats = seatMap[schedule.id] || [];
             const bookedSeats = scheduleSeats
-              .filter((seat) => seat.status === "booked")
+              .filter((seat) => seat.status === "booked" || seat.status === "held")
               .map((seat) => String(seat.seat_number));
             const blockedSeats = scheduleSeats
               .filter((seat) => seat.status === "blocked")
@@ -12229,7 +12570,9 @@ function co() {
               ...schedule,
               company_name: company.company_name || "",
               origin: route.origin || route.origin_city || "",
-              destination: route.destination || route.destination_city || "",
+              destination: stop ? stop.destination_city : route.destination || route.destination_city || "",
+              stop_id: stop ? stop.id : null,
+              raw_fare: stop ? stop.price : schedule.base_fare,
               origin_terminal: route.origin_terminal || "",
               destination_terminal: route.destination_terminal || "",
               departure_time: Number.isNaN(departure.getTime())
@@ -12241,15 +12584,15 @@ function co() {
               date: Number.isNaN(departure.getTime())
                 ? ""
                 : departure.toISOString().slice(0, 10),
-              fare: schedule.base_fare,
+              fare: dtFinal(stop ? stop.price : schedule.base_fare),
               seats_total:
                 scheduleSeats.length || schedule.available_seats || 0,
               seats_left: schedule.available_seats ?? scheduleSeats.length,
               booked_seats: bookedSeats,
               blocked_seats: blockedSeats,
-              layout: "2+3",
+              layout: /^2[-+]2$/.test(schedule.layout || "") ? "2+2" : "2+3",
             };
-          });
+          }); });
           qo(mappedSchedules);
           so(mappedSchedules);
         }
@@ -12267,6 +12610,8 @@ function co() {
       .channel("catalog-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "schedules" }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "routes" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "schedule_stops" }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "admin_settings" }, refresh)
       .on("postgres_changes", { event: "*", schema: "public", table: "bus_companies" }, refresh)
       .subscribe();
     return () => {
@@ -12450,6 +12795,8 @@ function co() {
         if (authError) return alert(authError.message);
         if (authData?.user) {
           if (t === "customer") {
+            // Creates the profile row if sign-up could not (needed for bookings).
+            try { await dailyTravelSupabase.rpc("ensure_customer_profile"); } catch {}
             const { data: profile } = await dailyTravelSupabase
               .from("users")
               .select("*")
@@ -12476,8 +12823,18 @@ function co() {
               .eq("owner_id", authData.user.id)
               .maybeSingle();
             if (company) {
-              if (company.approval_status !== "approved")
-                return alert("Company awaiting admin approval");
+              if (company.status === "suspended" || company.approval_status === "suspended") {
+                await dailyTravelSupabase.auth.signOut();
+                return alert("Your company account is suspended. Please contact Daily Travel support.");
+              }
+              if (company.approval_status === "rejected") {
+                await dailyTravelSupabase.auth.signOut();
+                return alert("Your company registration was not approved. Please contact Daily Travel support.");
+              }
+              if (company.approval_status !== "approved") {
+                await dailyTravelSupabase.auth.signOut();
+                return alert("Your company is awaiting admin approval. You will be able to sign in once it is approved.");
+              }
               l(company);
               e("dashboard");
               p("overview");
@@ -12522,6 +12879,8 @@ function co() {
         return alert(
           "Fill company name, email, password and both payout codes",
         );
+      let regFee;
+      try { regFee = await window.dailyTravelAskRegistrationFee(); } catch { return; }
       const { data: authData, error: authError } =
         await dailyTravelSupabase.auth.signUp({
           email: m.email,
@@ -12541,6 +12900,8 @@ function co() {
               rep_email: m.repEmail || "",
               merchant_mtn_code: m.mtnCode,
               merchant_airtel_code: m.airtelCode,
+              registration_method: regFee.method,
+              registration_reference: regFee.reference,
             },
           },
         });
@@ -12570,7 +12931,7 @@ function co() {
       (or(!1), ar(!0), To(null));
     },
     Yc = async () => {
-      if (!mo) return alert("Enter payer phone");
+      if (ve !== "bank" && !mo) return alert("Enter payer phone");
       if (!k) return;
       if (!r || !dailyTravelIsUuid(r.id))
         return alert("Please sign in with your customer account before paying");
@@ -12578,32 +12939,33 @@ function co() {
         return alert("This demo schedule is not connected to a live schedule yet");
       yo(!0);
       try {
-        const base = k.fare * C.length;
-        const admin = Math.round(base * 0.02);
-        const total = base;
+        const base = (k.raw_fare ?? k.fare) * C.length;
+        const admin = Math.round((base * dtPct()) / 100);
+        const total = base + admin;
         const { data: reserved, error: reserveError } =
           await dailyTravelSupabase.rpc("reserve_booking", {
             p_company_id: k.company_id,
             p_schedule_id: k.id,
-            p_route_id: dailyTravelIsUuid(k.route_id) ? k.route_id : null,
+            p_stop_id: k.stop_id || null,
             p_customer_id: r.id,
             p_seat_numbers: C,
-            p_passenger_count: C.length,
-            p_base_fare: base - admin,
-            p_admin_charge: admin,
-            p_flutterwave_charge: 0,
-            p_total_amount: total,
-            p_currency: "UGX",
             p_payment_method: ve,
-            p_passenger_details: [{ name: r.full_name || "Customer", phone: mo }],
+            p_expected_total: total,
+            p_passenger_details: [{ name: r.full_name || "Customer", phone: mo || r.phone || "" }],
           });
         if (reserveError) throw new Error(reserveError.message);
         const paymentId = reserved?.payment?.id;
         if (!paymentId) throw new Error("Booking payment could not be created");
-        await dailyTravelInvokeFunction("payment-initiate", {
+        const init = await dailyTravelInvokeFunction("payment-initiate", {
           payment_id: paymentId,
           phone: mo,
         });
+        if (init.status === "PENDING_BANK") {
+          yo(!1);
+          xc([{ ...reserved.booking, seat_numbers: C, payment_method: "bank", company_name: k.company_name }, ...RA]);
+          To({ bank: !0, instructions: init.instructions, total, company: k.company_name, method: "Bank transfer" });
+          return;
+        }
         let result = null;
         for (let attempt = 0; attempt < 10; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -12644,7 +13006,7 @@ function co() {
           method: ve,
           status: "successful",
           amount: total,
-          base_amount: base - admin,
+          base_amount: base,
           admin_amount: admin,
         };
         xc([localBooking, ...RA]);
@@ -12673,7 +13035,7 @@ function co() {
         );
         yo(!1);
         To({
-          base: base - admin,
+          base,
           admin,
           company: k.company_name,
           compCode:
@@ -12688,7 +13050,7 @@ function co() {
         alert(error.message || "Payment could not be started");
       }
     },
-    Yl = k ? k.fare * C.length : 0,
+    Yl = k ? dtFinal(k.raw_fare ?? k.fare, C.length) : 0,
     Jc = () => {
       if (!k) return null;
       let o = k.seats_total,
@@ -12732,11 +13094,11 @@ function co() {
                 {
                   onClick: () => gc(Z),
                   disabled: jA || iA,
-                  style: { gridColumn: Je, gridRow: Ye + 1 },
+                  style: { gridColumn: Je, gridRow: Ye + 1, ...(iA ? { background: "#CFD3D8", borderColor: "#CFD3D8", color: "#777" } : jA ? { background: "#1D4ED8", borderColor: "#1D4ED8", color: "#fff" } : Xo ? { background: "#FDB515", borderColor: "#FDB515", color: "#0B2A5B" } : {}) },
                   className: `h-9 w-full rounded-[8px] border text-[12px] font-semibold flex items-center justify-center transition-all
-                  ${iA ? "bg-[#E0E0E0] border-[#E0E0E0] text-[#aaa] cursor-not-allowed" : ""}
-                  ${jA ? "bg-[#B9E0F4] border-[#B9E0F4] text-[#4A8CB0] cursor-not-allowed" : ""}
-                  ${!jA && !iA && Xo ? "bg-[#0798E3] border-[#0798E3] text-white shadow-md" : ""}
+                  ${iA ? "bg-[#CFD3D8] border-[#CFD3D8] text-[#777] cursor-not-allowed" : ""}
+                  ${jA ? "bg-[#1D4ED8] border-[#1D4ED8] text-white cursor-not-allowed" : ""}
+                  ${!jA && !iA && Xo ? "bg-[#FDB515] border-[#FDB515] text-[#0B2A5B] shadow-md" : ""}
                   ${!jA && !iA && !Xo ? "bg-white border-[#E0E0E0] text-[#202124] hover:border-[#0798E3]" : ""}
                 `,
                   children: Z,
@@ -12744,6 +13106,11 @@ function co() {
                 Z,
               );
             }),
+          }),
+          c("div", {
+            className: "flex flex-wrap gap-3 justify-center mt-4 text-[11px] text-[#555]",
+            children: [["#fff", "Available", "#E0E0E0"], ["#1D4ED8", "Taken", "#1D4ED8"], ["#FDB515", "Selected", "#FDB515"], ["#CFD3D8", "Staff / blocked", "#CFD3D8"]].map(([bg, label, bd]) =>
+              c("span", { className: "flex items-center gap-1", key: label, children: [f("span", { style: { background: bg, border: "1px solid " + bd, width: 14, height: 14, borderRadius: 4, display: "inline-block" } }), label] })),
           }),
         ],
       });
@@ -13468,7 +13835,7 @@ function co() {
               children: [
                 f("button", {
                   type: "button",
-                  onClick: () => Vo(!0),
+                  onClick: () => window.dailyTravelOpenRecovery(),
                   className: "text-[12px] text-[#0798E3]",
                   children: "Forgot password?",
                 }),
@@ -13647,6 +14014,7 @@ function co() {
                     { id: "overview", label: "Overview", icon: Ue },
                     { id: "profile", label: "Profile", icon: ft },
                     { id: "buses", label: "Buses", icon: de },
+                    { id: "branches", label: "Branches", icon: de },
                     { id: "routes", label: "Routes", icon: Ct },
                     { id: "schedules", label: "Schedules", icon: Kt },
                     { id: "seats", label: "Seat Management", icon: ut },
@@ -13740,7 +14108,8 @@ function co() {
                           { id: "overview", label: "Overview", icon: Ue },
                           { id: "profile", label: "Profile", icon: ft },
                           { id: "buses", label: "Buses", icon: de },
-                          { id: "routes", label: "Routes", icon: Ct },
+                          { id: "branches", label: "Branches", icon: de },
+                    { id: "routes", label: "Routes", icon: Ct },
                           { id: "schedules", label: "Schedules", icon: Kt },
                           { id: "seats", label: "Seat Management", icon: ut },
                           { id: "bookings", label: "Bookings", icon: GA },
@@ -13804,7 +14173,7 @@ function co() {
                                       f("input", {
                                         value: O,
                                         onChange: (o) => Q(o.target.value),
-                                        placeholder: "From",
+                                        placeholder: "From or bus company",
                                         className:
                                           "w-full pl-9 pr-3 py-3 rounded-[10px] border border-[#E0E0E0] text-[14px] focus:outline-none focus:border-[#0798E3]",
                                       }),
@@ -13921,9 +14290,7 @@ function co() {
                                             f("div", {
                                               className:
                                                 "w-10 h-10 rounded-full bg-[#F5F7F8] flex items-center justify-center font-bold text-[12px] text-[#0798E3]",
-                                              children: h?.company_name
-                                                .slice(0, 2)
-                                                .toUpperCase(),
+                                              children: h?.logo ? f("img", { src: h.logo, alt: "", className: "w-10 h-10 rounded-full object-cover" }) : (h?.company_name || "").slice(0, 2).toUpperCase(),
                                             }),
                                             c("div", {
                                               children: [
@@ -14596,7 +14963,7 @@ function co() {
                 })
               : c(se, {
                   children: [
-                    ["overview", "profile", "buses", "routes", "schedules", "seats", "bookings", "payments", "earnings", "notifications"].includes(a) &&
+                    ["overview", "profile", "buses", "branches", "routes", "schedules", "seats", "bookings", "payments", "earnings", "notifications"].includes(a) &&
                       f(CompanyOps, { company: r, tab: a }),
                     false &&
                     a === "overview" &&
@@ -15075,31 +15442,6 @@ function co() {
                 c("div", {
                   className: "p-5 overflow-auto flex-1 scrollbar-hide",
                   children: [
-                    f("div", {
-                      className: "flex gap-3 mb-4 flex-wrap",
-                      children: [
-                        { label: "Available", color: "bg-white border" },
-                        { label: "Selected", color: "bg-[#0798E3]" },
-                        { label: "Taken", color: "bg-[#B9E0F4]" },
-                        { label: "Staff", color: "bg-[#202124]" },
-                        { label: "Blocked", color: "bg-[#E0E0E0]" },
-                      ].map((o) =>
-                        c(
-                          "span",
-                          {
-                            className:
-                              "flex items-center gap-1.5 text-[11px] text-[#666]",
-                            children: [
-                              f("span", {
-                                className: `w-3 h-3 rounded-full border ${o.color}`,
-                              }),
-                              o.label,
-                            ],
-                          },
-                          o.label,
-                        ),
-                      ),
-                    }),
                     Jc(),
                   ],
                 }),
@@ -15267,11 +15609,21 @@ function co() {
                                       }),
                                     ],
                                   }),
+                                  window.dailyTravelPricing?.bank_enabled &&
+                                    c("button", {
+                                      onClick: () => vo("bank"),
+                                      className: "bg-white rounded-[12px] p-4 border-2 flex flex-col items-center gap-2 transition col-span-2",
+                                      style: { borderColor: ve === "bank" ? "#0B2A5B" : "#EEE", boxShadow: ve === "bank" ? "0 4px 12px rgba(0,0,0,.12)" : "none" },
+                                      children: [
+                                        f("div", { className: "w-10 h-10 rounded-full flex items-center justify-center font-bold text-[10px]", style: { background: "#0B2A5B", color: "#fff" }, children: "BANK" }),
+                                        f("span", { className: "font-semibold text-[13px]", children: "Bank transfer" }),
+                                      ],
+                                    }),
                                 ],
                               }),
                             ],
                           }),
-                          f("input", {
+                          ve === "bank" ? f("p", { className: "text-[12px] text-[#666]", children: "You get the bank account details next. Your seats are held for 60 minutes while the administrator confirms your transfer." }) : f("input", {
                             value: mo,
                             onChange: (o) => Xc(o.target.value),
                             placeholder:
@@ -15318,33 +15670,15 @@ function co() {
                       }),
                       f("h3", {
                         className: "font-bold text-[20px] text-[#2E7D32]",
-                        children: "Payment Successful!",
+                        children: me.bank ? "Awaiting bank confirmation" : "Payment Successful!",
                       }),
                       c("p", {
                         className:
                           "text-[13px] text-[#555] mt-3 leading-relaxed",
                         children: [
-                          "UGX ",
-                          me.base.toLocaleString(),
-                          " disbursed to ",
-                          me.company,
-                          " via ",
-                          me.method,
-                          " ",
-                          me.compCode,
-                          ",",
-                          f("br", {}),
-                          "UGX ",
-                          me.admin.toLocaleString(),
-                          " disbursed to Daily Travel via ",
-                          me.method,
-                          " ",
-                          me.adminCode,
-                          " - ",
-                          f("span", {
-                            className: "text-[#2E7D32] font-semibold",
-                            children: "Real-time",
-                          }),
+                          me.bank
+                            ? f("span", { children: `Transfer UGX ${Number(me.total).toLocaleString()} to ${me.instructions?.bank_name || "the bank"}, account ${me.instructions?.account_name || ""} - ${me.instructions?.account_number || ""}. Use reference ${me.instructions?.reference || ""}. Your seats are held for 60 minutes and your tickets appear here once the administrator confirms the transfer.` })
+                            : `Your payment of UGX ${Number(Yl).toLocaleString()} to ${me.company} was received. Your tickets are ready.`,
                         ],
                       }),
                       c("div", {
