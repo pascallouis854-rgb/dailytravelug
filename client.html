@@ -11719,6 +11719,12 @@ function CompanyOps({ company, tab }) {
     await sb.from("schedules").update({ available_seats: updated.filter((s) => s.status === "available").length }).eq("id", seat.schedule_id);
     load();
   };
+  M.useEffect(() => {
+    if (tab !== "seats" || loading) return;
+    const open = data.schedules.filter((x) => x.status === "scheduled" && new Date(x.departure_datetime) > new Date());
+    if (!openSchedule || !open.some((x) => x.id === openSchedule)) { if (open[0]) loadSeats(open[0].id); }
+    else loadSeats(openSchedule); // refresh when bookings change
+  }, [tab, loading, data.schedules.length, data.bookings.length]);
   const verifyTicket = async () => {
     const code = ticketCode.trim(); if (!code) return;
     const { data: row, error: e } = await sb.from("tickets").select("*").eq("ticket_code", code.toUpperCase()).maybeSingle();
@@ -11842,7 +11848,20 @@ function CompanyOps({ company, tab }) {
         h("span", { style: { display: "flex", gap: 8 } },
           h("button", { style: dtBtn("#E8F4FF", DT.blue), onClick: () => run("Update route", sb.from("routes").update({ status: r.status === "active" ? "inactive" : "active" }).eq("id", r.id)) }, r.status === "active" ? "Deactivate" : "Activate"),
           redBtn("Delete", () => { if (confirm("Delete this route?")) run("Delete route", sb.from("routes").delete().eq("id", r.id), "Route deleted"); })))) : empty("No routes yet.")));
-  } else if (tab === "schedules" || tab === "seats") {
+  } else if (tab === "seats") {
+    const trips = data.schedules.filter((x) => x.status === "scheduled" && new Date(x.departure_datetime) > new Date());
+    const cur = trips.find((x) => x.id === openSchedule);
+    const count = (f) => seats.filter(f).length;
+    body = h("div", null,
+      card("Choose a trip", trips.length ? h("select", { style: dtInput, value: openSchedule || "", onChange: (e) => loadSeats(e.target.value) },
+        trips.map((x) => h("option", { key: x.id, value: x.id }, `${routeName(x.route_id)} - ${busName(x.bus_id)} - ${dtFmt(x.departure_datetime)}`))) : empty("No upcoming trips. Publish a schedule first.")),
+      cur ? h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 12, marginBottom: 16 } },
+        tile("Taken", count((x) => x.status === "booked" || x.status === "held"), "linear-gradient(135deg,#1D4ED8,#0B2A5B)"),
+        tile("Free", count((x) => x.status === "available"), "linear-gradient(135deg,#16A34A,#0F766E)"),
+        tile("Blocked offline", count((x) => x.status === "blocked" && x.label !== "staff"), "linear-gradient(135deg,#F59E0B,#EA580C)"),
+        tile("Staff seats", count((x) => x.label === "staff"), "linear-gradient(135deg,#6B7280,#374151)")) : null,
+      cur ? card("Seat map - tap a free seat to block it for offline sale, tap an orange seat to release it", h(SeatMap, { schedule: cur })) : null);
+  } else if (tab === "schedules") {
     const selRoute = data.routes.find((r) => r.id === schedForm.route_id);
     body = h("div", null,
       tab === "schedules" ? card("Publish a schedule", data.buses.length && data.routes.length ? h("div", null,
