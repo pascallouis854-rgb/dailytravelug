@@ -11844,6 +11844,8 @@ function qi() {
     [Ni, Ri] = L.useState(`1. How to track bus?
 2. Refund policy?
 3. Luggage limits?`),
+    [dtCoFaq, setDtCoFaq] = L.useState(""),
+    [dtCoWa, setDtCoWa] = L.useState(""),
     [Xi, wi] = L.useState(""),
     [Nt, Wi] = L.useState(""),
     [Pn, Li] = L.useState(""),
@@ -12152,7 +12154,8 @@ function qi() {
         audience_type: "company",
         phone: ks,
         email: Ms,
-        whatsapp: ks,
+        whatsapp: dtCoWa || null,
+        faqs: dtCoFaq.split("\n").map((faq) => faq.trim()).filter(Boolean),
       };
       const { data: existing } = await dailyTravelSupabase
         .from("support_settings")
@@ -12279,6 +12282,8 @@ function qi() {
           if (companySupport) {
             Os(companySupport.phone || "");
             Zs(companySupport.email || "");
+            setDtCoWa(companySupport.whatsapp || "");
+            setDtCoFaq(Array.isArray(companySupport.faqs) ? companySupport.faqs.join("\n") : "");
           }
         }
       } catch (error) {
@@ -14653,7 +14658,7 @@ function qi() {
                                 children: [
                                   i("label", {
                                     className: "text-[12px] text-[#6B7280]",
-                                    children: "FAQs",
+                                    children: "FAQs (one per line; Question :: Answer)",
                                   }),
                                   i("textarea", {
                                     value: Ni,
@@ -14707,17 +14712,27 @@ function qi() {
                                       }),
                                     ],
                                   }),
+                                  c("div", {
+                                    children: [
+                                      i("label", { className: "text-[12px] text-[#6B7280]", children: "Partner WhatsApp" }),
+                                      i("input", {
+                                        value: dtCoWa,
+                                        onChange: (f) => setDtCoWa(f.target.value),
+                                        className: "mt-1 w-full h-11 px-3 rounded-[10px] border border-[#E5E7EB] text-[14px]",
+                                      }),
+                                    ],
+                                  }),
                                 ],
                               }),
                               c("div", {
                                 children: [
                                   i("label", {
                                     className: "text-[12px] text-[#6B7280]",
-                                    children: "Company FAQs",
+                                    children: "Company FAQs (one per line; Question :: Answer)",
                                   }),
                                   i("textarea", {
-                                    value: Ni,
-                                    onChange: (f) => Ri(f.target.value),
+                                    value: dtCoFaq,
+                                    onChange: (f) => setDtCoFaq(f.target.value),
                                     rows: 4,
                                     className:
                                       "mt-1 w-full p-3 rounded-[10px] border border-[#E5E7EB] text-[14px] resize-none",

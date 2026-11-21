@@ -11500,6 +11500,10 @@ var Bt = W("Settings", [
   ],
   ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }],
 ]);
+var DtHeadset = W("Headset", [
+  ["path", { d: "M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm0 0a9 9 0 1 1 18 0m0 0v5a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3Z", key: "hs1" }],
+  ["path", { d: "M21 16v2a4 4 0 0 1-4 4h-5", key: "hs2" }],
+]);
 var Qt = W("Star", [
   [
     "path",
@@ -11617,7 +11621,7 @@ function CompanyOps({ company, tab }) {
   const h = M.createElement;
   const cid = company && company.id;
   const sb = dailyTravelSupabase;
-  const [data, setData] = M.useState({ buses: [], routes: [], branches: [], schedules: [], stops: [], bookings: [], payments: [], notifications: [], tickets: [], customers: [] });
+  const [data, setData] = M.useState({ buses: [], routes: [], branches: [], schedules: [], stops: [], bookings: [], payments: [], notifications: [], tickets: [], customers: [], requests: [], adminSupport: null });
   const [loading, setLoading] = M.useState(true);
   const [error, setError] = M.useState("");
   const [notice, setNotice] = M.useState("");
@@ -11634,6 +11638,8 @@ function CompanyOps({ company, tab }) {
   const [period, setPeriod] = M.useState("daily");
   const [msg, setMsg] = M.useState({ to: "all", user_id: "", title: "", message: "" });
   const [busy, setBusy] = M.useState(false);
+  const [supForm, setSupForm] = M.useState(null);
+  const [replies, setReplies] = M.useState({});
 
   const fail = (what, err) => { console.error(what, err); setError(`${what}: ${err && err.message ? err.message : err}`); setNotice(""); };
   const ok = (m) => { setError(""); setNotice(m); };
@@ -11648,13 +11654,15 @@ function CompanyOps({ company, tab }) {
     if (firstError) fail("Could not load company data", firstError.error);
     const notes = await sb.rpc("my_notifications", { p_limit: 100 });
     const custs = await sb.rpc("company_customers");
+    const reqs = await sb.from("support_requests").select("*").eq("company_id", cid).order("created_at", { ascending: false });
+    const adm = await sb.from("support_settings").select("*").eq("audience_type", "company").limit(1).maybeSingle();
     const ids = (bookings.data || []).map((b) => b.id);
     let tickets = [];
     if (ids.length) { const t = await sb.from("tickets").select("*").in("booking_id", ids); if (!t.error) tickets = t.data || []; }
     setData({
       buses: buses.data || [], routes: routes.data || [], branches: branches.data || [], schedules: schedules.data || [], stops: stops.data || [],
       bookings: bookings.data || [], payments: (payments.data || []).filter((p) => !p.company_hidden), notifications: Array.isArray(notes.data) ? notes.data : [], tickets,
-      customers: Array.isArray(custs.data) ? custs.data : [],
+      customers: Array.isArray(custs.data) ? custs.data : [], requests: reqs.data || [], adminSupport: adm.data || null,
     });
     setLoading(false);
   }, [cid]);
@@ -11664,7 +11672,7 @@ function CompanyOps({ company, tab }) {
     let timer = null;
     const refresh = () => { clearTimeout(timer); timer = setTimeout(load, 400); };
     let channel = sb.channel(`company-live-${cid}`);
-    ["buses", "routes", "branches", "schedules", "bookings", "payments", "schedule_stops"].forEach((table) => { channel = channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `company_id=eq.${cid}` }, refresh); });
+    ["buses", "routes", "branches", "schedules", "bookings", "payments", "schedule_stops", "support_requests"].forEach((table) => { channel = channel.on("postgres_changes", { event: "*", schema: "public", table, filter: `company_id=eq.${cid}` }, refresh); });
     channel = channel.on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, refresh).on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, refresh);
     channel.subscribe();
     return () => { clearTimeout(timer); sb.removeChannel(channel); };
@@ -11768,6 +11776,19 @@ function CompanyOps({ company, tab }) {
     setBusy(false);
     if (e) return fail("Send message", e);
     setMsg({ ...msg, title: "", message: "" }); ok("Message sent"); load();
+  };
+  M.useEffect(() => {
+    if (company && !supForm) setSupForm({ support_phone: company.support_phone || "", support_email: company.support_email || "", support_whatsapp: company.support_whatsapp || "", support_hours: company.support_hours || "", faqs: (Array.isArray(company.support_faqs) ? company.support_faqs : []).join("\n") });
+  }, [company]);
+  const saveSupport = async () => {
+    const f = { support_phone: supForm.support_phone.trim() || null, support_email: supForm.support_email.trim() || null, support_whatsapp: supForm.support_whatsapp.trim() || null, support_hours: supForm.support_hours.trim() || null, support_faqs: supForm.faqs.split("\n").map((x) => x.trim()).filter(Boolean) };
+    await run("Save support details", sb.from("bus_companies").update(f).eq("id", cid), "Support details saved. Customers see them on their Support page.");
+  };
+  const sendReply = async (r) => {
+    const text = (replies[r.id] || "").trim();
+    if (!text) return fail("Reply", "Write a reply first");
+    await run("Send reply", sb.from("support_requests").update({ reply: text, status: "answered", replied_at: new Date().toISOString() }).eq("id", r.id), "Reply sent to the customer");
+    setReplies({ ...replies, [r.id]: "" });
   };
   const clearEarnings = async () => {
     if (!confirm("Delete your earnings records up to now? They disappear from your dashboard only. The platform and customers keep their own records.")) return;
@@ -11944,6 +11965,31 @@ function CompanyOps({ company, tab }) {
       card(`Inbox (${data.notifications.length}${unreadCount ? ", " + unreadCount + " unread" : ""})`, data.notifications.length ? data.notifications.map((n) => row(n.id,
         h("span", { style: { fontWeight: n.read ? 400 : 700, flex: 1 } }, `${n.title || "Notice"} - ${n.message || ""}`),
         n.read ? h("span", { style: { color: "#888" } }, dtFmt(n.created_at)) : h("button", { style: dtBtn("#E8F4FF", DT.blue), onClick: async () => { await sb.rpc("mark_notification_read", { p_id: n.id }); load(); } }, "Mark read"))) : empty("No notifications. New ticket sales and messages from Daily Travel appear here.")));
+  } else if (tab === "support" && supForm) {
+    const adm = data.adminSupport;
+    body = h("div", null,
+      card("Support details your customers will see",
+        h("p", { style: { fontSize: 12, color: "#667", marginBottom: 10 } }, "These appear on the customer Support page under your company name."),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 10 } },
+          h("div", { style: { flex: "1 1 220px", display: "flex" } }, field("Support phone", supForm.support_phone, (v) => setSupForm({ ...supForm, support_phone: v }))),
+          h("div", { style: { flex: "1 1 220px", display: "flex" } }, field("WhatsApp number", supForm.support_whatsapp, (v) => setSupForm({ ...supForm, support_whatsapp: v }))),
+          h("div", { style: { flex: "1 1 220px", display: "flex" } }, field("Support email", supForm.support_email, (v) => setSupForm({ ...supForm, support_email: v }))),
+          h("div", { style: { flex: "1 1 220px", display: "flex" } }, field("Working hours", supForm.support_hours, (v) => setSupForm({ ...supForm, support_hours: v }), { placeholder: "Mon-Sat 7am-9pm" }))),
+        h("label", { style: { display: "flex", flexDirection: "column", fontSize: 11, color: "#667", gap: 4, marginTop: 10 } }, "Frequently asked questions (one per line; use  Question :: Answer  to add an answer)",
+          h("textarea", { style: { ...dtInput, height: 110 }, value: supForm.faqs, onChange: (e) => setSupForm({ ...supForm, faqs: e.target.value }) })),
+        h("button", { style: { ...dtBtn(), marginTop: 12 }, onClick: saveSupport }, "Save support details")),
+      card(`Customer messages (${data.requests.filter((r) => !r.reply).length} waiting)`, data.requests.length ? data.requests.map((r) => h("div", { key: r.id, style: { ...dtRowStyle, flexDirection: "column", alignItems: "stretch" } },
+        h("div", { style: { fontWeight: 700 } }, `${r.subject} - ${r.customer_name || "Customer"}`),
+        h("div", { style: { color: "#445" } }, r.message),
+        h("small", { style: { color: "#888" } }, dtFmt(r.created_at)),
+        r.reply ? h("div", { style: { background: "#E8F5E9", borderRadius: 10, padding: "8px 10px", fontSize: 12 } }, "Your reply: " + r.reply) : h("div", { style: { display: "flex", gap: 8 } },
+          h("input", { style: dtInput, placeholder: "Write a reply", value: replies[r.id] || "", onChange: (e) => setReplies({ ...replies, [r.id]: e.target.value }) }),
+          h("button", { style: dtBtn(), onClick: () => sendReply(r) }, "Reply")))) : empty("No customer messages yet.")),
+      card("Daily Travel support for companies",
+        adm && (adm.phone || adm.email) ? h("div", { style: { fontSize: 13, lineHeight: 1.9 } },
+          adm.phone ? h("div", null, "\ud83d\udcde ", h("a", { href: "tel:" + adm.phone, style: { color: DT.blue } }, adm.phone)) : null,
+          adm.email ? h("div", null, "\u2709\ufe0f ", h("a", { href: "mailto:" + adm.email, style: { color: DT.blue } }, adm.email)) : null,
+          Array.isArray(adm.faqs) && adm.faqs.length ? h("ul", { style: { marginTop: 8, paddingLeft: 18, color: "#445" } }, adm.faqs.map((q, i) => h("li", { key: i }, String(q).split("::")[0]))) : null) : empty("Daily Travel has not added company support details yet.")));
   } else if (tab === "profile" && profileForm) {
     const keys = [["phone", "Phone"], ["address", "Address"], ["operating_location", "Operating location"], ["description", "Description"], ["rep_name", "Representative name"], ["rep_phone", "Representative phone"], ["rep_email", "Representative email"], ["support_phone", "Support phone (shown on tickets)"], ["support_email", "Support email (shown on tickets)"], ["merchant_mtn_code", "MTN MoMo merchant code"], ["merchant_airtel_code", "Airtel Money merchant code"]];
     body = h("div", null,
@@ -12201,6 +12247,97 @@ function CompanyOps({ company, tab }) {
     ];
   }
 
+
+  // ---------- customer Support screen ----------
+  const digitsOnly = (v) => String(v || "").replace(/\D/g, "");
+  const waLink = (v) => { const d = digitsOnly(v); return d ? "https://wa.me/" + (d.startsWith("0") ? "256" + d.slice(1) : d) : null; };
+  const faqItems = (faqs) => (Array.isArray(faqs) ? faqs : []).map((x) => String(x)).filter(Boolean).map((line) => {
+    const parts = line.split("::");
+    return parts.length > 1 ? { q: parts[0].trim(), a: parts.slice(1).join("::").trim() } : { q: line, a: "" };
+  });
+  const ContactCard = ({ title, phone, email, whatsapp, hours }) => {
+    const row = (icon, label, href, text) => href && text ? h("a", { key: label, href, target: href.startsWith("http") ? "_blank" : undefined, rel: "noreferrer", style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 14, background: "#F4F9FF", textDecoration: "none", color: C.navy, fontWeight: 700, fontSize: 14 } },
+      h("span", { style: { fontSize: 20 } }, icon), h("span", { style: { display: "flex", flexDirection: "column" } }, h("small", { style: { fontWeight: 500, color: C.grey, fontSize: 11 } }, label), text)) : null;
+    const rows = [row("\ud83d\udcde", "Call", phone ? "tel:" + String(phone).replace(/\s/g, "") : null, phone), row("\ud83d\udcac", "WhatsApp", waLink(whatsapp), whatsapp), row("\u2709\ufe0f", "Email", email ? "mailto:" + email : null, email)].filter(Boolean);
+    return h("div", { style: { background: "#fff", border: "1px solid #E6EEF7", borderRadius: 18, padding: 18, display: "flex", flexDirection: "column", gap: 10 } },
+      h("h3", { style: { fontWeight: 800, fontSize: 15, color: C.navy } }, title),
+      rows.length ? rows : h("p", { className: "dtx-muted" }, "No contact details have been added yet."),
+      hours ? h("p", { className: "dtx-muted" }, "Hours: " + hours) : null);
+  };
+  const Faqs = ({ faqs }) => {
+    const items = faqItems(faqs); const [open, setOpen] = M.useState(-1);
+    if (!items.length) return null;
+    return h("div", { style: { background: "#fff", border: "1px solid #E6EEF7", borderRadius: 18, padding: 18 } },
+      h("h3", { style: { fontWeight: 800, fontSize: 15, color: C.navy, marginBottom: 8 } }, "Frequently asked questions"),
+      items.map((it, i) => h("div", { key: i, style: { borderTop: i ? "1px solid #F0F0F0" : "none", padding: "10px 0" } },
+        h("button", { onClick: () => setOpen(open === i ? -1 : i), style: { background: "none", border: 0, textAlign: "left", width: "100%", fontWeight: 600, fontSize: 13.5, cursor: it.a ? "pointer" : "default", color: C.ink } }, it.q, it.a ? (open === i ? "  \u25B4" : "  \u25BE") : ""),
+        open === i && it.a ? h("p", { className: "dtx-muted", style: { marginTop: 6, fontSize: 13 } }, it.a) : null)));
+  };
+  window.DailyTravelSupport = function DailyTravelSupport({ user }) {
+    const [platform, setPlatform] = M.useState(null);
+    const [companies, setCompanies] = M.useState([]);
+    const [companyId, setCompanyId] = M.useState("");
+    const [info, setInfo] = M.useState(null);
+    const [requests, setRequests] = M.useState([]);
+    const [form, setForm] = M.useState({ subject: "", message: "" });
+    const [busy, setBusy] = M.useState(false);
+    const [msg, setMsg] = M.useState(null);
+    const loadRequests = M.useCallback(async () => {
+      if (!user) return;
+      const { data } = await sb.from("support_requests").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(30);
+      setRequests(data || []);
+    }, [user && user.id]);
+    M.useEffect(() => {
+      let live = true;
+      const load = async () => {
+        const { data: s1 } = await sb.from("support_settings").select("*").eq("audience_type", "customer").limit(1).maybeSingle();
+        if (live) setPlatform(s1 || {});
+        const { data: cs } = await sb.from("bus_companies").select("id, company_name").order("company_name");
+        if (live) setCompanies(cs || []);
+      };
+      load();
+      const ch = sb.channel("dtx-support-" + Math.random().toString(36).slice(2))
+        .on("postgres_changes", { event: "*", schema: "public", table: "support_settings" }, load)
+        .on("postgres_changes", { event: "*", schema: "public", table: "support_requests" }, () => loadRequests()).subscribe();
+      loadRequests();
+      return () => { live = false; sb.removeChannel(ch); };
+    }, [loadRequests]);
+    M.useEffect(() => {
+      if (!companyId) return setInfo(null);
+      sb.rpc("get_company_support", { p_company_id: companyId }).then(({ data }) => setInfo(data || {}));
+    }, [companyId]);
+    const send = async () => {
+      if (!companyId) return setMsg({ bad: true, text: "Choose the bus company first" });
+      if (!form.subject.trim() || !form.message.trim()) return setMsg({ bad: true, text: "Write a subject and a message" });
+      setBusy(true); setMsg(null);
+      const { error } = await sb.from("support_requests").insert({ user_id: user.id, company_id: companyId, customer_name: user.full_name || null, subject: form.subject.trim(), message: form.message.trim() });
+      setBusy(false);
+      if (error) return setMsg({ bad: true, text: "Could not send: " + error.message });
+      setForm({ subject: "", message: "" }); setMsg({ text: "Sent. The bus company will reply here and in your notifications." }); loadRequests();
+    };
+    const box = { background: "#fff", border: "1px solid #E6EEF7", borderRadius: 18, padding: 18, display: "flex", flexDirection: "column", gap: 10 };
+    return h("div", { style: { maxWidth: 640, margin: "0 auto", display: "flex", flexDirection: "column", gap: 14, paddingBottom: 90 } },
+      h("h2", { style: { fontWeight: 800, fontSize: 18 } }, "Support"),
+      platform ? h(ContactCard, { title: "Daily Travel support", phone: platform.phone, email: platform.email, whatsapp: platform.whatsapp }) : h("p", { className: "dtx-muted" }, "Loading..."),
+      platform ? h(Faqs, { faqs: platform.faqs }) : null,
+      h("div", { style: box },
+        h("h3", { style: { fontWeight: 800, fontSize: 15, color: C.navy } }, "Contact a bus company"),
+        h("select", { className: "dtx-in", value: companyId, onChange: (e) => setCompanyId(e.target.value) }, h("option", { value: "" }, "Choose bus company..."), companies.map((c) => h("option", { key: c.id, value: c.id }, c.company_name))),
+        companyId && info ? [
+          h(ContactCard, { key: "c", title: (info.company_name || "Bus company") + " support", phone: info.phone, email: info.email, whatsapp: info.whatsapp, hours: info.hours }),
+          h(Faqs, { key: "f", faqs: info.faqs }),
+          h("input", { key: "s", className: "dtx-in", placeholder: "Subject", value: form.subject, onChange: (e) => setForm({ ...form, subject: e.target.value }) }),
+          h("textarea", { key: "m", className: "dtx-in", style: { height: 90 }, placeholder: "Describe your question or problem", value: form.message, onChange: (e) => setForm({ ...form, message: e.target.value }) }),
+          msg && h("p", { key: "g", style: { fontSize: 13, fontWeight: 600, color: msg.bad ? "#C62828" : "#2E7D32" } }, msg.text),
+          h("button", { key: "b", className: "dtx-btn", disabled: busy, onClick: send }, busy ? "Sending..." : "Send message"),
+        ] : null),
+      requests.length ? h("div", { style: box },
+        h("h3", { style: { fontWeight: 800, fontSize: 15, color: C.navy } }, "My messages"),
+        requests.map((r) => h("div", { key: r.id, className: "dtx-note" + (r.reply ? "" : " unread") },
+          h("b", null, r.subject), h("p", null, r.message),
+          r.reply ? h("p", { style: { color: "#0B2A5B", fontWeight: 600 } }, "Reply: " + r.reply) : h("small", null, "Waiting for a reply"),
+          h("small", null, " " + new Date(r.created_at).toLocaleString())))) : null);
+  };
   // ---------- customer Settings screen ----------
   window.DailyTravelSettings = function DailyTravelSettings({ user, onSaved }) {
     const empty = { full_name: "", phone: "", date_of_birth: "", gender: "", address: "", city: "", nationality: "", id_number: "", emergency_contact_name: "", emergency_contact_phone: "" };
@@ -14054,17 +14191,25 @@ function co() {
             className: "flex items-center gap-3",
             children: [
               f("button", {
+                onClick: () => (sr ? p("bookings") : i("search")),
+                title: sr ? "Bookings" : "Search trips",
+                "aria-label": sr ? "Bookings" : "Search trips",
                 className: "p-2 rounded-full bg-[#F5F7F8]",
                 children: f(pe, { className: "w-4 h-4 text-[#666]" }),
               }),
               f("button", {
+                onClick: () => (sr ? p("overview") : i("companies")),
+                title: sr ? "Overview" : "Bus companies",
+                "aria-label": sr ? "Overview" : "Bus companies",
                 className: "p-2 rounded-full bg-[#F5F7F8]",
                 children: f(Ue, { className: "w-4 h-4 text-[#666]" }),
               }),
-              f("div", {
-                className:
-                  "w-9 h-9 rounded-full bg-[#0798E3] text-white flex items-center justify-center text-[13px] font-bold overflow-hidden",
-                children: r?.full_name?.[0] || r?.company_name?.[0] || "U",
+              f("button", {
+                onClick: () => (sr ? p("profile") : i("settings")),
+                title: "My profile",
+                "aria-label": "My profile",
+                className: "w-9 h-9 rounded-full bg-[#0798E3] text-white flex items-center justify-center text-[13px] font-bold overflow-hidden",
+                children: (r?.avatar_url || r?.logo_url) ? f("img", { src: r.avatar_url || r.logo_url, alt: "", className: "w-full h-full object-cover" }) : r?.full_name?.[0] || r?.company_name?.[0] || "U",
               }),
               f("span", {
                 className:
@@ -14075,6 +14220,9 @@ function co() {
                 className: "relative",
                 children: [
                   f("button", {
+                    onClick: () => (sr ? p("notifications") : i("notifications")),
+                    title: "Notifications",
+                    "aria-label": "Notifications",
                     className: "p-2 rounded-full bg-[#F5F7F8]",
                     children: f(KA, { className: "w-4 h-4 text-[#666]" }),
                   }),
@@ -14086,9 +14234,12 @@ function co() {
                 ],
               }),
               f("button", {
-                onClick: () => {
+                onClick: async () => {
+                  try { await dailyTravelSupabase.auth.signOut(); } catch {}
                   (l(null), e("welcome"));
                 },
+                title: "Sign out",
+                "aria-label": "Sign out",
                 className: "p-2 rounded-full hover:bg-[#F5F7F8]",
                 children: f(nr, { className: "w-4 h-4 text-[#999]" }),
               }),
@@ -14111,6 +14262,7 @@ function co() {
                     { id: "bookings", label: "My Bookings", icon: it },
                     { id: "payments", label: "Payment History", icon: ce },
                     { id: "notifications", label: "Notifications", icon: KA },
+                    { id: "support", label: "Support", icon: DtHeadset },
                     { id: "settings", label: "Settings", icon: Bt },
                   ].map((o) =>
                     c(
@@ -14141,6 +14293,7 @@ function co() {
                     { id: "payments", label: "Payments", icon: dt },
                     { id: "earnings", label: "Earnings", icon: ce },
                     { id: "notifications", label: "Notifications", icon: KA },
+                    { id: "support", label: "Support", icon: DtHeadset },
                   ].map((o) =>
                     c(
                       "button",
@@ -14205,6 +14358,7 @@ function co() {
                             label: "Notifications",
                             icon: KA,
                           },
+                          { id: "support", label: "Support", icon: DtHeadset },
                           { id: "settings", label: "Settings", icon: Bt },
                         ].map((o) =>
                           c(
@@ -14239,6 +14393,7 @@ function co() {
                             label: "Notifications",
                             icon: KA,
                           },
+                          { id: "support", label: "Support", icon: DtHeadset },
                         ].map((o) =>
                           c(
                             "button",
@@ -15015,11 +15170,12 @@ function co() {
                         ],
                       }),
                     u === "settings" && f(window.DailyTravelSettings, { user: r, onSaved: (nu) => l(nu) }),
+                    u === "support" && f(window.DailyTravelSupport, { user: r }),
                   ],
                 })
               : c(se, {
                   children: [
-                    ["overview", "profile", "buses", "branches", "routes", "schedules", "seats", "bookings", "payments", "earnings", "notifications"].includes(a) &&
+                    ["overview", "profile", "buses", "branches", "routes", "schedules", "seats", "bookings", "payments", "earnings", "notifications", "support"].includes(a) &&
                       f(CompanyOps, { company: r, tab: a }),
                     false &&
                     a === "overview" &&
@@ -15414,6 +15570,7 @@ function co() {
               { id: "tickets", icon: GA },
               { id: "bookings", icon: it },
               { id: "payments", icon: ce },
+              { id: "support", icon: DtHeadset },
             ].map((o) =>
               f(
                 "button",

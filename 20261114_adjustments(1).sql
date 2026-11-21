@@ -852,3 +852,76 @@ ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS id_number text,
   ADD COLUMN IF NOT EXISTS emergency_contact_name text,
   ADD COLUMN IF NOT EXISTS emergency_contact_phone text;
+
+-- ---------------------------------------------------------------------------
+-- 15. Support: company contacts/FAQs shown to customers, and customer -> company support requests
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.bus_companies
+  ADD COLUMN IF NOT EXISTS support_whatsapp text,
+  ADD COLUMN IF NOT EXISTS support_hours text,
+  ADD COLUMN IF NOT EXISTS support_faqs jsonb DEFAULT '[]'::jsonb;
+
+CREATE TABLE IF NOT EXISTS public.support_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  company_id uuid REFERENCES public.bus_companies(id) ON DELETE CASCADE,
+  customer_name text,
+  subject text NOT NULL,
+  message text NOT NULL,
+  status text NOT NULL DEFAULT 'open',
+  reply text,
+  replied_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS support_requests_company_idx ON public.support_requests (company_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS support_requests_user_idx ON public.support_requests (user_id, created_at DESC);
+ALTER TABLE public.support_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS support_requests_customer_insert ON public.support_requests;
+DROP POLICY IF EXISTS support_requests_read ON public.support_requests;
+DROP POLICY IF EXISTS support_requests_company_update ON public.support_requests;
+CREATE POLICY support_requests_customer_insert ON public.support_requests FOR INSERT TO authenticated
+  WITH CHECK (user_id = auth.uid() AND company_id IS NOT NULL AND status = 'open' AND reply IS NULL);
+CREATE POLICY support_requests_read ON public.support_requests FOR SELECT TO authenticated
+  USING (user_id = auth.uid() OR public.current_user_owns_company(company_id) OR public.current_user_is_admin());
+CREATE POLICY support_requests_company_update ON public.support_requests FOR UPDATE TO authenticated
+  USING (public.current_user_owns_company(company_id) OR public.current_user_is_admin())
+  WITH CHECK (public.current_user_owns_company(company_id) OR public.current_user_is_admin());
+GRANT SELECT, INSERT, UPDATE ON public.support_requests TO authenticated;
+
+-- Tell the company about a new request, and the customer about a reply.
+CREATE OR REPLACE FUNCTION public.support_request_notify() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO public.notifications (audience_type, company_id, kind, title, message, sender_role, dedupe_key)
+    VALUES ('company', NEW.company_id, 'support', 'New support request',
+            coalesce(NEW.customer_name, 'A customer') || ': ' || NEW.subject, 'system', NEW.id || ':new')
+    ON CONFLICT (dedupe_key) DO NOTHING;
+  ELSIF TG_OP = 'UPDATE' AND NEW.reply IS NOT NULL AND NEW.reply IS DISTINCT FROM OLD.reply THEN
+    INSERT INTO public.notifications (audience_type, user_id, kind, title, message, sender_role, dedupe_key)
+    VALUES ('customer', NEW.user_id, 'support', 'Reply to your support request',
+            NEW.subject || ' - ' || left(NEW.reply, 200), 'company', NEW.id || ':reply:' || extract(epoch FROM now())::bigint)
+    ON CONFLICT (dedupe_key) DO NOTHING;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS support_request_notify_trg ON public.support_requests;
+CREATE TRIGGER support_request_notify_trg AFTER INSERT OR UPDATE ON public.support_requests
+  FOR EACH ROW EXECUTE FUNCTION public.support_request_notify();
+
+-- Public contact details a customer may see for a company (only approved, active ones).
+CREATE OR REPLACE FUNCTION public.get_company_support(p_company_id uuid) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT jsonb_build_object('company_name', c.company_name, 'phone', coalesce(c.support_phone, c.phone),
+         'email', coalesce(c.support_email, c.email), 'whatsapp', c.support_whatsapp, 'hours', c.support_hours,
+         'faqs', coalesce(c.support_faqs, '[]'::jsonb))
+    FROM public.bus_companies c WHERE c.id = p_company_id AND public.company_is_public(c.id);
+$$;
+GRANT EXECUTE ON FUNCTION public.get_company_support(uuid) TO anon, authenticated;
+
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime')
+     AND NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname='supabase_realtime' AND schemaname='public' AND tablename='support_requests') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.support_requests;
+  END IF;
+END $$;
