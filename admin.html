@@ -1822,6 +1822,46 @@ summary {
   }
 }
 </style>
+<style id="dt-theme">
+/* Fresh Journey colours: colours only, no layout or feature changes */
+:root{--dt-navy:#0B2A5B;--dt-blue:#0670AE;--dt-sky:#EAF6FD;--dt-soft:#F2F8FC;--dt-line:#D9E8F3;--dt-muted:#4F6079;--dt-amber:#FDB515}
+body{background:var(--dt-sky);color:var(--dt-navy)}
+.bg-\[\#F5F7F8\]{background-color:#EAF6FD!important}
+.bg-\[\#F9FAFB\],.bg-\[\#F9FBFB\]{background-color:#F2F8FC!important}
+.bg-\[\#F3F4F6\]{background-color:#E3F1FA!important}
+.bg-\[\#0798E3\]{background-color:#0670AE!important}
+.bg-\[\#0680c2\]{background-color:#055A8C!important}
+.hover\:bg-\[\#0680c2\]:hover{background-color:#055A8C!important}
+.bg-\[\#E8F4FF\]{background-color:#DCEFFB!important}
+.bg-\[\#E6FFFE\]{background-color:#DDF5F4!important}
+.bg-\[\#202124\]{background-color:#0B2A5B!important}
+.bg-\[\#2A2E33\]{background-color:#123775!important}
+.bg-\[\#62C9C5\]{background-color:#2BB5B8!important}
+.from-\[\#0798E3\]{--tw-gradient-from:#0670AE var(--tw-gradient-from-position)!important;--tw-gradient-to:rgb(6 112 174 / 0) var(--tw-gradient-to-position)!important;--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)!important}
+.to-\[\#62C9C5\]{--tw-gradient-to:#2BB5B8 var(--tw-gradient-to-position)!important}
+.text-\[\#0798E3\]{color:#0670AE!important}
+.text-\[\#62C9C5\]{color:#1E9EA1!important}
+.text-\[\#202124\]{color:#0B2A5B!important}
+.text-\[\#374151\]{color:#23406B!important}
+.text-\[\#555\],.text-\[\#666\],.text-\[\#777\],.text-\[\#6B7280\]{color:#4F6079!important}
+.text-\[\#888\],.text-\[\#999\],.text-\[\#9CA3AF\]{color:#62738C!important}
+.text-\[\#AAA\],.text-\[\#CCC\]{color:#8496AD!important}
+.text-\[\#FFC107\],.text-\[\#F9A825\]{color:#E39F00!important}
+.fill-\[\#FFC107\]{fill:#FDB515!important}
+.border-\[\#0798E3\],.ring-\[\#0798E3\]{border-color:#0670AE!important;--tw-ring-color:#0670AE!important}
+.border-\[\#E0E0E0\],.border-\[\#E5E7EB\],.border-\[\#E6E6E6\],.border-\[\#CFD3D8\],.border-\[\#CFCFCF\]{border-color:#D9E8F3!important}
+.border-\[\#EEE\],.border-\[\#F0F0F0\],.border-\[\#F5F5F5\],.border-\[\#F3F4F6\]{border-color:#E4EFF7!important}
+.border-\[\#202124\]{border-color:#0B2A5B!important}
+.border-\[\#62C9C5\]{border-color:#2BB5B8!important}
+.bg-\[\#FFF8E1\],.bg-\[\#FEF3C7\]{background-color:#FFF3D1!important}
+.text-\[\#2E7D32\],.text-\[\#059669\]{color:#146B3A!important}
+.bg-\[\#E8F5E9\],.bg-\[\#D1FAE5\]{background-color:#E3F7EC!important}
+#root input:focus,#root textarea:focus,#root select:focus{outline-color:#0670AE}
+.bg-\[\#202124\] .text-\[\#9CA3AF\],.bg-\[\#202124\] .text-\[\#6B7280\],.bg-\[\#202124\] .text-\[\#888\],.bg-\[\#202124\] .text-\[\#999\],.bg-\[\#202124\] .text-\[\#AAA\],.bg-\[\#202124\] .text-\[\#666\],.bg-\[\#202124\] .text-\[\#CCC\]{color:#BFD0E8!important}
+.bg-\[\#202124\] .text-\[\#202124\]{color:#fff!important}
+.bg-\[\#202124\] .text-\[\#62C9C5\],.bg-\[\#202124\] .text-\[\#0798E3\]{color:#7FE0DC!important}
+::selection{background:#FDB515;color:#0B2A5B}
+</style>
 </head>
 <body>
   <div id="root"></div>
@@ -11542,7 +11582,7 @@ const DtPill = ({ text, bg, fg }) => L.createElement("span", { style: { backgrou
 const DtTitle = ({ title, sub, right }) => { const h = L.createElement; return h("div", { style: { display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 18 } }, h("div", null, h("h2", { style: { fontSize: 24, fontWeight: 800, color: DT.navy, margin: 0 } }, title), sub ? h("p", { style: { fontSize: 13, color: DT.mute, margin: "4px 0 0" } }, sub) : null), right || null); };
 const DtSegment = ({ value, options, onChange }) => { const h = L.createElement; return h("div", { style: { display: "inline-flex", background: "#fff", padding: 4, borderRadius: 999, border: "1px solid " + DT.line, boxShadow: "0 2px 8px rgba(11,42,91,.05)" } }, options.map((o) => h("button", { key: o, onClick: () => onChange(o), style: { border: 0, cursor: "pointer", padding: "7px 16px", borderRadius: 999, fontSize: 13, fontWeight: 600, background: value === o ? "linear-gradient(135deg," + DT.navy + "," + DT.blue + ")" : "transparent", color: value === o ? "#fff" : DT.mute } }, o))); };
 const DtKpi = ({ label, value, sub, gradient, icon }) => { const h = L.createElement; return h("div", { style: { borderRadius: 18, padding: 18, color: "#fff", background: gradient, boxShadow: "0 8px 22px rgba(11,42,91,.14)", position: "relative", overflow: "hidden", minHeight: 108 } }, h("div", { style: { position: "absolute", right: -18, top: -18, width: 90, height: 90, borderRadius: "50%", background: "rgba(255,255,255,.16)" } }), h("div", { style: { fontSize: 22, marginBottom: 4 } }, icon), h("div", { style: { fontSize: 12, opacity: 0.92, fontWeight: 600 } }, label), h("div", { style: { fontSize: 24, fontWeight: 800, marginTop: 2 } }, value), sub ? h("div", { style: { fontSize: 11, opacity: 0.9, marginTop: 2 } }, sub) : null); };
-const DT_KPI = { blue: "linear-gradient(135deg,#0798E3,#38BDF8)", amber: "linear-gradient(135deg,#F59E0B,#FDB515)", green: "linear-gradient(135deg,#059669,#34D399)", purple: "linear-gradient(135deg,#6D28D9,#A78BFA)", red: "linear-gradient(135deg,#DC2626,#FB7185)", navy: "linear-gradient(135deg,#0B2A5B,#1D4ED8)" };
+const DT_KPI = { blue: "linear-gradient(135deg,#0670AE,#2BA8E0)", amber: "linear-gradient(135deg,#D99100,#FDB515)", green: "linear-gradient(135deg,#0E8F94,#2BB5B8)", purple: "linear-gradient(135deg,#123775,#3B6FC9)", red: "linear-gradient(135deg,#DC2626,#FB7185)", navy: "linear-gradient(135deg,#0B2A5B,#0670AE)" };
 const DtAvatar = ({ company, size = 48 }) => { const h = L.createElement; return company.logo_url ? h("img", { src: company.logo_url, alt: "", style: { width: size, height: size, borderRadius: 14, objectFit: "cover", background: "#EEF4FF", flex: "none" } }) : h("div", { style: { width: size, height: size, borderRadius: 14, background: "linear-gradient(135deg,#E0F2FE,#DDD6FE)", color: DT.navy, fontWeight: 800, fontSize: size * 0.4, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" } }, (company.company_name || "?").slice(0, 1).toUpperCase()); };
 const dtStatusPill = (c) => c.status === "suspended" ? L.createElement(DtPill, { text: "Suspended", bg: "#FEE2E2", fg: "#B91C1C" }) : c.approval_status === "approved" ? L.createElement(DtPill, { text: "Approved", bg: "#DCFCE7", fg: "#15803D" }) : c.approval_status === "rejected" ? L.createElement(DtPill, { text: "Rejected", bg: "#F3F4F6", fg: "#4B5563" }) : L.createElement(DtPill, { text: "Pending", bg: "#FEF3C7", fg: "#B45309" });
 const dtTableWrap = (...kids) => L.createElement("div", { style: { overflowX: "auto" } }, L.createElement("table", { style: { width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 560 } }, ...kids));

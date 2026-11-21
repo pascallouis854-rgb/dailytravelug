@@ -1921,6 +1921,46 @@ summary {
     h1,h2{letter-spacing:-.01em}
   }
 </style>
+<style id="dt-theme">
+/* Fresh Journey colours: colours only, no layout or feature changes */
+:root{--dt-navy:#0B2A5B;--dt-blue:#0670AE;--dt-sky:#EAF6FD;--dt-soft:#F2F8FC;--dt-line:#D9E8F3;--dt-muted:#4F6079;--dt-amber:#FDB515}
+body{background:var(--dt-sky);color:var(--dt-navy)}
+.bg-\[\#F5F7F8\]{background-color:#EAF6FD!important}
+.bg-\[\#F9FAFB\],.bg-\[\#F9FBFB\]{background-color:#F2F8FC!important}
+.bg-\[\#F3F4F6\]{background-color:#E3F1FA!important}
+.bg-\[\#0798E3\]{background-color:#0670AE!important}
+.bg-\[\#0680c2\]{background-color:#055A8C!important}
+.hover\:bg-\[\#0680c2\]:hover{background-color:#055A8C!important}
+.bg-\[\#E8F4FF\]{background-color:#DCEFFB!important}
+.bg-\[\#E6FFFE\]{background-color:#DDF5F4!important}
+.bg-\[\#202124\]{background-color:#0B2A5B!important}
+.bg-\[\#2A2E33\]{background-color:#123775!important}
+.bg-\[\#62C9C5\]{background-color:#2BB5B8!important}
+.from-\[\#0798E3\]{--tw-gradient-from:#0670AE var(--tw-gradient-from-position)!important;--tw-gradient-to:rgb(6 112 174 / 0) var(--tw-gradient-to-position)!important;--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)!important}
+.to-\[\#62C9C5\]{--tw-gradient-to:#2BB5B8 var(--tw-gradient-to-position)!important}
+.text-\[\#0798E3\]{color:#0670AE!important}
+.text-\[\#62C9C5\]{color:#1E9EA1!important}
+.text-\[\#202124\]{color:#0B2A5B!important}
+.text-\[\#374151\]{color:#23406B!important}
+.text-\[\#555\],.text-\[\#666\],.text-\[\#777\],.text-\[\#6B7280\]{color:#4F6079!important}
+.text-\[\#888\],.text-\[\#999\],.text-\[\#9CA3AF\]{color:#62738C!important}
+.text-\[\#AAA\],.text-\[\#CCC\]{color:#8496AD!important}
+.text-\[\#FFC107\],.text-\[\#F9A825\]{color:#E39F00!important}
+.fill-\[\#FFC107\]{fill:#FDB515!important}
+.border-\[\#0798E3\],.ring-\[\#0798E3\]{border-color:#0670AE!important;--tw-ring-color:#0670AE!important}
+.border-\[\#E0E0E0\],.border-\[\#E5E7EB\],.border-\[\#E6E6E6\],.border-\[\#CFD3D8\],.border-\[\#CFCFCF\]{border-color:#D9E8F3!important}
+.border-\[\#EEE\],.border-\[\#F0F0F0\],.border-\[\#F5F5F5\],.border-\[\#F3F4F6\]{border-color:#E4EFF7!important}
+.border-\[\#202124\]{border-color:#0B2A5B!important}
+.border-\[\#62C9C5\]{border-color:#2BB5B8!important}
+.bg-\[\#FFF8E1\],.bg-\[\#FEF3C7\]{background-color:#FFF3D1!important}
+.text-\[\#2E7D32\],.text-\[\#059669\]{color:#146B3A!important}
+.bg-\[\#E8F5E9\],.bg-\[\#D1FAE5\]{background-color:#E3F7EC!important}
+#root input:focus,#root textarea:focus,#root select:focus{outline-color:#0670AE}
+.bg-\[\#202124\] .text-\[\#9CA3AF\],.bg-\[\#202124\] .text-\[\#6B7280\],.bg-\[\#202124\] .text-\[\#888\],.bg-\[\#202124\] .text-\[\#999\],.bg-\[\#202124\] .text-\[\#AAA\],.bg-\[\#202124\] .text-\[\#666\],.bg-\[\#202124\] .text-\[\#CCC\]{color:#BFD0E8!important}
+.bg-\[\#202124\] .text-\[\#202124\]{color:#fff!important}
+.bg-\[\#202124\] .text-\[\#62C9C5\],.bg-\[\#202124\] .text-\[\#0798E3\]{color:#7FE0DC!important}
+::selection{background:#FDB515;color:#0B2A5B}
+</style>
 </head>
 <body>
   <div id="root"></div>
@@ -11835,10 +11875,10 @@ function CompanyOps({ company, tab }) {
     const freeSeats = upcoming.reduce((n, s) => n + (s.available_seats || 0), 0);
     body = h("div", null,
       h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 16 } },
-        tile("Confirmed bookings", confirmed.length, "linear-gradient(135deg,#0798E3,#0B2A5B)"),
-        tile("Your earnings", dtMoney(paid.reduce((n, p) => n + (p.base_amount || 0), 0)), "linear-gradient(135deg,#16A34A,#0F766E)"),
-        tile("Upcoming trips", upcoming.length, "linear-gradient(135deg,#7C3AED,#4338CA)"),
-        tile("Seats occupied", totalSeats ? Math.round(((totalSeats - freeSeats) / totalSeats) * 100) + "%" : "-", "linear-gradient(135deg,#F59E0B,#EA580C)")),
+        tile("Confirmed bookings", confirmed.length, "linear-gradient(135deg,#0B2A5B,#0670AE)"),
+        tile("Your earnings", dtMoney(paid.reduce((n, p) => n + (p.base_amount || 0), 0)), "linear-gradient(135deg,#0670AE,#0E8F94)"),
+        tile("Upcoming trips", upcoming.length, "linear-gradient(135deg,#1F4FA3,#0B2A5B)"),
+        tile("Seats occupied", totalSeats ? Math.round(((totalSeats - freeSeats) / totalSeats) * 100) + "%" : "-", "linear-gradient(135deg,#E8A100,#B87400)")),
       !data.buses.length || !data.routes.length || !upcoming.length ? card("Get started", h("p", { style: { fontSize: 13, lineHeight: 1.7 } }, `1. Add a bus (${data.buses.length})   2. Add a branch and route (${data.routes.length})   3. Publish a schedule (${upcoming.length}). Customers see your trips as soon as a schedule is published.`)) : null,
       card("Recent bookings", data.bookings.length ? data.bookings.slice(0, 6).map((b) => row(b.id, h("span", null, `${b.booking_reference || b.id.slice(0, 8)} • seats ${dtSeatList(b.seat_numbers)}`), h("span", null, `${dtMoney(b.total_amount)} • ${b.status}`))) : empty("No bookings yet.")));
   } else if (tab === "branches") {
@@ -11893,10 +11933,10 @@ function CompanyOps({ company, tab }) {
       card("Choose a trip", trips.length ? h("select", { style: dtInput, value: openSchedule || "", onChange: (e) => loadSeats(e.target.value) },
         trips.map((x) => h("option", { key: x.id, value: x.id }, `${routeName(x.route_id)} - ${busName(x.bus_id)} - ${dtFmt(x.departure_datetime)}`))) : empty("No upcoming trips. Publish a schedule first.")),
       cur ? h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 12, marginBottom: 16 } },
-        tile("Taken", count((x) => x.status === "booked" || x.status === "held"), "linear-gradient(135deg,#1D4ED8,#0B2A5B)"),
-        tile("Free", count((x) => x.status === "available"), "linear-gradient(135deg,#16A34A,#0F766E)"),
-        tile("Blocked offline", count((x) => x.status === "blocked" && x.label !== "staff"), "linear-gradient(135deg,#F59E0B,#EA580C)"),
-        tile("Staff seats", count((x) => x.label === "staff"), "linear-gradient(135deg,#6B7280,#374151)")) : null,
+        tile("Taken", count((x) => x.status === "booked" || x.status === "held"), "linear-gradient(135deg,#0670AE,#0B2A5B)"),
+        tile("Free", count((x) => x.status === "available"), "linear-gradient(135deg,#0670AE,#0E8F94)"),
+        tile("Blocked offline", count((x) => x.status === "blocked" && x.label !== "staff"), "linear-gradient(135deg,#E8A100,#B87400)"),
+        tile("Staff seats", count((x) => x.label === "staff"), "linear-gradient(135deg,#5B6B82,#23406B)")) : null,
       cur ? card("Seat map - tap a free seat to block it for offline sale, tap an orange seat to release it", h(SeatMap, { schedule: cur })) : null);
   } else if (tab === "schedules") {
     const selRoute = data.routes.find((r) => r.id === schedForm.route_id);
@@ -11947,10 +11987,10 @@ function CompanyOps({ company, tab }) {
     const today = dtDay(new Date()), week = dtWeekKey(new Date()), month = dtMonthKey(new Date());
     body = h("div", null,
       h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12, marginBottom: 16 } },
-        tile("Today", dtMoney(sum(paid.filter((p) => dtDay(p.created_at) === today), "base_amount")), "linear-gradient(135deg,#0798E3,#0B2A5B)"),
-        tile("This week", dtMoney(sum(paid.filter((p) => dtWeekKey(p.created_at) === week), "base_amount")), "linear-gradient(135deg,#16A34A,#0F766E)"),
-        tile("This month", dtMoney(sum(paid.filter((p) => dtMonthKey(p.created_at) === month), "base_amount")), "linear-gradient(135deg,#7C3AED,#4338CA)"),
-        tile("All shown", dtMoney(sum(paid, "base_amount")), "linear-gradient(135deg,#F59E0B,#EA580C)")),
+        tile("Today", dtMoney(sum(paid.filter((p) => dtDay(p.created_at) === today), "base_amount")), "linear-gradient(135deg,#0B2A5B,#0670AE)"),
+        tile("This week", dtMoney(sum(paid.filter((p) => dtWeekKey(p.created_at) === week), "base_amount")), "linear-gradient(135deg,#0670AE,#0E8F94)"),
+        tile("This month", dtMoney(sum(paid.filter((p) => dtMonthKey(p.created_at) === month), "base_amount")), "linear-gradient(135deg,#1F4FA3,#0B2A5B)"),
+        tile("All shown", dtMoney(sum(paid, "base_amount")), "linear-gradient(135deg,#E8A100,#B87400)")),
       card("Earnings", h("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, ["daily", "weekly", "monthly"].map((p) => h("button", { key: p, onClick: () => setPeriod(p), style: dtBtn(period === p ? undefined : "#EEF4FA", period === p ? "#fff" : DT.navy) }, p[0].toUpperCase() + p.slice(1)))),
         rows.length ? h(DtBars, { rows, color: DT.blue }) : empty("No earnings yet."),
         h("div", { style: { marginTop: 8 } }, redBtn("Delete earnings records", clearEarnings))));
