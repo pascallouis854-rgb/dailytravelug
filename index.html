@@ -13445,9 +13445,14 @@ function co() {
                 }),
                 f("button", {
                   type: "button",
-                  onClick: () => {
-                    (cr("Support: support@daily-travel.ug • 0770 000 000"),
-                      pr("login"));
+                  onClick: async () => {
+                    let line = "Support is not set up yet";
+                    try {
+                      const { data } = await dailyTravelSupabase.from("support_settings").select("phone,email,whatsapp").eq("audience_type", "customer").limit(1).maybeSingle();
+                      const parts = data ? [data.email, data.phone, data.whatsapp ? "WhatsApp " + data.whatsapp : null].filter(Boolean) : [];
+                      if (parts.length) line = "Support: " + parts.join(" \u2022 ");
+                    } catch {}
+                    (cr(line), pr("login"));
                   },
                   className:
                     "text-[13px] text-[#999] mt-1 hover:text-[#666] cursor-pointer",
